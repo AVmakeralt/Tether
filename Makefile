@@ -29,7 +29,13 @@ AST_SRC := \
 
 PARSER_SRC := src/parser/parser.cpp
 
-SSA_SRC := src/ssa/node.cpp
+SSA_SRC := \
+    src/ssa/node.cpp \
+    src/ssa/builder.cpp \
+    src/ssa/optimizer.cpp \
+    src/ssa/emit_llvm.cpp \
+    src/ssa/partial_eval.cpp \
+    src/ssa/incremental.cpp
 
 TYPES_SRC := src/types/types.cpp
 
@@ -73,7 +79,8 @@ TEST_SRC := \
     tests/test_parser.cpp \
     tests/test_ast.cpp \
     tests/test_types.cpp \
-    tests/test_pipeline.cpp
+    tests/test_pipeline.cpp \
+    tests/test_ssa.cpp
 
 bin/tether_tests: $(TEST_SRC) $(COMPILER_SRC) | bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(TEST_SRC) $(COMPILER_SRC) -o $@

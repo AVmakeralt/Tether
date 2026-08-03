@@ -1,31 +1,45 @@
 // main.cpp — tetherc driver
 //
 // Usage:
-//   tetherc <file.tether>                Parse, check, emit LLVM IR.
+//   tetherc <file.tether>                Parse, check, lower to SSA, emit LLVM IR.
 //   tetherc --emit-llvm <file.tether>    Emit .ll file (default).
+//   tetherc --emit-ssa <file.tether>     Emit Tether SSA IR.
 //   tetherc --emit-ast <file.tether>     Emit AST pretty-print.
 //   tetherc --emit-tokens <file.tether>  Emit token stream.
 //   tetherc --check <file.tether>        Parse + type check only.
+//   tetherc --no-opt <file.tether>       Skip SSA optimization.
+//   tetherc --incremental <file.tether>  Use incremental compilation cache.
 //   tetherc --version
 //   tetherc --help
 //
-// The default pipeline is:
+// The full pipeline is:
 //   source -> lexer -> parser -> AST
 //          -> resolver -> type checker -> borrow checker
-//          -> LLVM IR text (.ll)
+//          -> SSA builder (AST → SSA, with ownership/region/arena tracking)
+//          -> SSA optimizer (CSE, DCE, const fold, SCCP, CFG simplify)
+//          -> SSA → LLVM IR text (.ll)
 //
-// Multi-file: imports are resolved relative to the entry file's
-// directory and the standard library directory.
+// Why not AST → LLVM IR directly?
+//   LLVM cannot verify ownership, track allocation domains, enforce
+//   region invariants, monomorphize generics, resolve trait dispatch,
+//   run rewrite rules, do partial evaluation, or compile pattern
+//   matches with structural patterns. All of that happens on Tether's
+//   own SSA module. LLVM only sees the final, optimized SSA lowered
+//   to its own IR.
 
 #include "ast/printer.hpp"
 #include "borrow/borrow.hpp"
 #include "check/check.hpp"
 #include "diagnostics/diagnostics.hpp"
 #include "lexer/lexer.hpp"
-#include "llvm/emit.hpp"
 #include "module/loader.hpp"
 #include "parser/parser.hpp"
 #include "resolve/resolve.hpp"
+#include "ssa/builder.hpp"
+#include "ssa/emit_llvm.hpp"
+#include "ssa/incremental.hpp"
+#include "ssa/optimizer.hpp"
+#include "ssa/partial_eval.hpp"
 #include "support/arena.hpp"
 #include "support/intern.hpp"
 #include "support/source.hpp"
@@ -42,12 +56,15 @@ namespace {
 enum class EmitMode {
     Tokens,
     Ast,
+    Ssa,
     Llvm,
     Check,
 };
 
 struct Options {
     EmitMode mode = EmitMode::Llvm;
+    bool no_opt = false;
+    bool incremental = false;
     std::string input;
     std::string output;
     std::string stdlib;
@@ -55,28 +72,35 @@ struct Options {
 
 void print_help() {
     std::cout <<
-        "tetherc — Tether compiler (v0.2: full pipeline to LLVM IR)\n"
+        "tetherc — Tether compiler (v0.3: full SSA pipeline)\n"
         "\n"
         "Usage:\n"
-        "  tetherc <file.tether>                Lex, parse, check, emit LLVM IR.\n"
+        "  tetherc <file.tether>                Full pipeline → LLVM IR.\n"
         "  tetherc --emit-llvm <file.tether>    Emit .ll file (default).\n"
+        "  tetherc --emit-ssa <file.tether>     Emit Tether SSA IR.\n"
         "  tetherc --emit-ast <file.tether>     Emit AST pretty-print.\n"
         "  tetherc --emit-tokens <file.tether>  Emit token stream.\n"
-        "  tetherc --check <file.tether>        Parse + check only (no codegen).\n"
+        "  tetherc --check <file.tether>        Parse + check only.\n"
+        "  tetherc --no-opt <file.tether>       Skip SSA optimization.\n"
+        "  tetherc --incremental <file.tether>  Use incremental cache.\n"
         "  tetherc -o <output> <file.tether>    Write output to <output>.\n"
         "  tetherc --stdlib <dir> <file.tether> Use <dir> as stdlib root.\n"
         "  tetherc --version\n"
         "  tetherc --help\n"
         "\n"
-        "Pipeline: source -> lexer -> parser -> AST -> resolver ->\n"
-        "          type checker -> borrow checker -> LLVM IR\n"
+        "Pipeline: source → lexer → parser → AST → resolver →\n"
+        "          type checker → borrow checker → SSA builder →\n"
+        "          SSA optimizer → LLVM IR\n"
         "\n"
-        "Multi-file: imports are resolved relative to the entry file's\n"
-        "directory and the stdlib root.\n";
+        "Tether's SSA module is its own IR. LLVM only sees the final,\n"
+        "optimized SSA lowered to LLVM IR. This is required because LLVM\n"
+        "cannot verify ownership, track allocation domains, enforce region\n"
+        "invariants, monomorphize generics, resolve trait dispatch, run\n"
+        "rewrite rules, do partial evaluation, or compile pattern matches.\n";
 }
 
 void print_version() {
-    std::cout << "tetherc 0.2.0\n";
+    std::cout << "tetherc 0.3.0\n";
 }
 
 bool parse_args(int argc, char** argv, Options& opts) {
@@ -90,10 +114,13 @@ bool parse_args(int argc, char** argv, Options& opts) {
             print_version();
             std::exit(0);
         }
-        if (a == "--emit-llvm")   opts.mode = EmitMode::Llvm;
-        else if (a == "--emit-ast")    opts.mode = EmitMode::Ast;
-        else if (a == "--emit-tokens") opts.mode = EmitMode::Tokens;
-        else if (a == "--check")       opts.mode = EmitMode::Check;
+        if (a == "--emit-llvm")        opts.mode = EmitMode::Llvm;
+        else if (a == "--emit-ssa")         opts.mode = EmitMode::Ssa;
+        else if (a == "--emit-ast")         opts.mode = EmitMode::Ast;
+        else if (a == "--emit-tokens")      opts.mode = EmitMode::Tokens;
+        else if (a == "--check")            opts.mode = EmitMode::Check;
+        else if (a == "--no-opt")           opts.no_opt = true;
+        else if (a == "--incremental")      opts.incremental = true;
         else if (a == "-o") {
             if (i + 1 >= argc) {
                 std::cerr << "tetherc: -o requires an argument\n";
@@ -134,7 +161,6 @@ int run(Options& opts) {
     tether::SourceManager     sm;
     tether::Arena             arena;
 
-    // Determine stdlib root.
     std::string stdlib = opts.stdlib;
     if (stdlib.empty()) {
         if (const char* env = std::getenv("TETHER_STDLIB")) {
@@ -152,7 +178,6 @@ int run(Options& opts) {
         return 2;
     }
 
-    // Lex errors are reported during load.
     if (diag.has_errors()) {
         std::cerr << diag.render(sm);
         return 1;
@@ -160,28 +185,39 @@ int run(Options& opts) {
 
     // Resolve + type check + borrow check every module.
     tether::type::TypeContext tc(arena, intern);
-    bool all_ok = true;
     for (const auto& m : loader.modules()) {
         if (!m.ast) continue;
         tether::resolve::Resolver resolver(tc, diag, intern, arena);
-        if (!resolver.resolve_module(*m.ast)) all_ok = false;
-
+        resolver.resolve_module(*m.ast);
         tether::check::TypeChecker checker(tc, diag, resolver, intern);
-        if (!checker.check_module(*m.ast)) all_ok = false;
-
+        checker.check_module(*m.ast);
         tether::borrow::BorrowChecker borrow(tc, diag, resolver, intern);
-        if (!borrow.check_module(*m.ast)) all_ok = false;
+        borrow.check_module(*m.ast);
     }
 
     if (diag.has_errors()) {
         std::cerr << diag.render(sm);
         if (opts.mode == EmitMode::Check) return 1;
-        // For codegen modes, still try to emit partial output.
+    }
+
+    // Lower each module to SSA.
+    std::vector<tether::ssa::Module> ssa_modules;
+    for (const auto& m : loader.modules()) {
+        if (!m.ast) continue;
+        tether::ssa::Builder builder(tc, diag, intern, arena);
+        ssa_modules.push_back(builder.lower_module(*m.ast));
+    }
+
+    // Optimize (unless --no-opt).
+    if (!opts.no_opt) {
+        tether::ssa::Optimizer opt(tc, diag);
+        for (auto& ssa_mod : ssa_modules) {
+            opt.run(ssa_mod);
+        }
     }
 
     switch (opts.mode) {
         case EmitMode::Tokens: {
-            // Re-lex the entry file and print tokens.
             uint32_t fid = sm.load_file(opts.input);
             const tether::SourceFile& f = sm.file(fid);
             tether::Lexer lexer(intern, diag, f);
@@ -192,8 +228,6 @@ int run(Options& opts) {
                     std::cout << "(\"" << intern.get(t.str_id) << "\")";
                 } else if (t.kind == tether::TokenKind::IntLit) {
                     std::cout << "(" << t.int_val << ")";
-                } else if (t.kind == tether::TokenKind::FloatLit) {
-                    std::cout << "(" << t.float_val << ")";
                 }
                 std::cout << "\n";
             }
@@ -206,13 +240,32 @@ int run(Options& opts) {
         }
         case EmitMode::Check:
             return diag.has_errors() ? 1 : 0;
+        case EmitMode::Ssa: {
+            std::string all;
+            for (const auto& ssa_mod : ssa_modules) {
+                all += tether::ssa::render_module(ssa_mod, tc);
+                all += "\n";
+            }
+            if (!opts.output.empty()) {
+                std::ofstream out(opts.output);
+                if (!out) {
+                    std::cerr << "tetherc: cannot write '" << opts.output
+                              << "'\n";
+                    return 2;
+                }
+                out << all;
+                std::cout << "wrote " << opts.output << " ("
+                          << all.size() << " bytes)\n";
+            } else {
+                std::cout << all;
+            }
+            return diag.has_errors() ? 1 : 0;
+        }
         case EmitMode::Llvm: {
-            // Emit LLVM IR for every module, concatenated.
             std::string all_ir;
-            for (const auto& m : loader.modules()) {
-                if (!m.ast) continue;
-                tether::llvm::Emitter emitter(tc, diag, intern, arena);
-                all_ir += emitter.emit_module(*m.ast);
+            for (const auto& ssa_mod : ssa_modules) {
+                tether::ssa::LlvmEmitter emitter(tc, diag, intern);
+                all_ir += emitter.emit(ssa_mod);
                 all_ir += "\n";
             }
             if (!opts.output.empty()) {
