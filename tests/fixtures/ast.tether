@@ -1,0 +1,65 @@
+// fixture: ast.tether — a small compiler-style AST example
+//
+// Demonstrates the patterns the language is designed for: immutable
+// AST nodes, arena allocation, pattern matching, traits.
+
+module parser::ast
+
+import lexer::tokens
+
+struct SourceLoc {
+    file:   int,
+    line:   int,
+    column: int,
+}
+
+enum BinOp { Add, Sub, Mul, Div }
+
+enum NodeKind {
+    Int(u64),
+    Bool(bool),
+    Binary(BinOp, ref Node, ref Node),
+    Var(StrId),
+}
+
+struct Node {
+    loc:  SourceLoc,
+    kind: NodeKind,
+}
+
+impl Node {
+    fn is_expr(self) -> bool {
+        match self.kind {
+            Int(_)       => true,
+            Bool(_)      => true,
+            Binary(_, _, _) => true,
+            Var(_)       => true,
+        }
+    }
+
+    fn is_const(self) -> bool {
+        match self.kind {
+            Int(_)  => true,
+            Bool(_) => true,
+            _       => false,
+        }
+    }
+}
+
+// Build a binary node, allocating in an arena.
+// (v0.1 doesn't support `-> alloc arena T` return-type syntax; the
+// allocator annotation will be added with the type system.)
+fn build_binary(op: BinOp, lhs: ref Node, rhs: ref Node) -> ref Node {
+    alloc arena make_node(op, lhs, rhs)
+}
+
+// Constant folding as a function — a `rewrite` rule would be nicer.
+fn fold(node: ref Node) -> ref Node {
+    match node.kind {
+        Binary(Add, Int(a), Int(b)) => Int(a + b),
+        Binary(Mul, Int(a), Int(b)) => Int(a * b),
+        Binary(Mul, x, Int(1))      => x,
+        Binary(Mul, x, Int(0))      => Int(0),
+        _ => node,
+    }
+}

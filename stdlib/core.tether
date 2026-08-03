@@ -1,0 +1,84 @@
+// stdlib/core.tether — core standard types
+//
+// v0.1 placeholder. The type checker (not yet implemented) will provide
+// these as built-in types. They are declared here for documentation and
+// for the parser to consume as user-defined types in tests.
+
+module std::core
+
+// ---- Option -----------------------------------------------------------
+
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+impl<T> Option<T> {
+    fn is_some(self) -> bool {
+        match self {
+            Some(_) => true,
+            None    => false,
+        }
+    }
+
+    fn is_none(self) -> bool {
+        match self {
+            Some(_) => false,
+            None    => true,
+        }
+    }
+
+    fn unwrap(self) -> T {
+        match self {
+            Some(v) => v,
+            None    => unreachable(),
+        }
+    }
+}
+
+// ---- Result -----------------------------------------------------------
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+impl<T, E> Result<T, E> {
+    fn is_ok(self) -> bool {
+        match self {
+            Ok(_)  => true,
+            Err(_) => false,
+        }
+    }
+
+    fn is_err(self) -> bool {
+        match self {
+            Ok(_)  => false,
+            Err(_) => true,
+        }
+    }
+
+    fn unwrap(self) -> T {
+        match self {
+            Ok(v)  => v,
+            Err(_) => unreachable(),
+        }
+    }
+}
+
+// ---- Slice ------------------------------------------------------------
+
+// Slices are bounds-checked views into contiguous storage. The
+// compiler provides them as a built-in type; this declaration is
+// a placeholder for documentation.
+//
+//   struct Slice<T> {
+//       ptr: *const T,    // only legal in unsafe / extern
+//       len: u64,
+//   }
+
+// ---- ref / mut ref ----------------------------------------------------
+
+// References are built-in. They are non-null, initialized, and
+// lifetime-checked. The region system is inferred; explicit regions
+// use the `ref(region) T` syntax.

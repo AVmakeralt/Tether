@@ -1,0 +1,12 @@
+// fixture: hello.tether — a minimal program showing core syntax
+//
+// Run with: ./build/bin/tetherc tests/fixtures/hello.tether
+
+module hello
+
+import std::io
+
+fn main() {
+    let name = "world"
+    io::printf("hello, %s!\n", name)
+}

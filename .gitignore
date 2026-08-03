@@ -1,0 +1,80 @@
+# ============================================================================
+# Tether — .gitignore
+# ----------------------------------------------------------------------------
+
+# ---- Skill files (never push agent/skill scaffolding) ----------------------
+skills/
+SKILL.md
+SKILL.*/
+*.skill
+skill_manifest.json
+agent-ctx/
+/agent-ctx/
+
+# ---- Build artifacts -------------------------------------------------------
+build/
+build-*/
+out/
+dist/
+bin/
+lib/
+
+# ---- CMake ----------------------------------------------------------------
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+!CMakeLists.txt
+compile_commands.json
+CMakeUserPresets.json
+
+# ---- Compiled objects ------------------------------------------------------
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# ---- Tether compiler output ------------------------------------------------
+*.sea
+*.ll
+*.bc
+*.s
+*.out
+
+# ---- Editor / IDE ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---- Tags / databases ------------------------------------------------------
+tags
+TAGS
+*.tags
+.clangd/
+.cache/
+
+# ---- Coverage / profiling --------------------------------------------------
+*.gcov
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# ---- Local config ----------------------------------------------------------
+.env
+.env.local
+*.local
+
+# ---- OS junk ---------------------------------------------------------------
+__pycache__/
+*.pyc
+node_modules/

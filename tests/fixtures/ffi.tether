@@ -1,0 +1,19 @@
+// fixture: ffi.tether — FFI to C and C++ headers
+//
+// Demonstrates the FFI model: explicit headers, extern declarations.
+
+module app::foreign_ffi
+
+ffi "stdio.h"
+
+extern fn printf(fmt: *const u8, ...) -> int
+
+ffi "stdlib.h"
+
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)
+
+fn main() {
+    let buf = unsafe { malloc(1024) }
+    unsafe { free(buf) }
+}
