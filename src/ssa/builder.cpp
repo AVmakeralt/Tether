@@ -21,11 +21,12 @@ Module Builder::lower_module(const ast::Module& m) {
     for (ItemPtr item : m.items) {
         if (!item) continue;
         if (item->kind == ItemKind::Struct) {
-            std::vector<type::TypePtr> fields;
+            StructDef def;
+            def.name = item->name;
             for (const auto& f : item->fields) {
-                fields.push_back(resolve_ast_type(f.type));
+                def.fields.emplace_back(f.name, resolve_ast_type(f.type));
             }
-            struct_defs_[item->name] = std::move(fields);
+            struct_defs_[item->name] = std::move(def);
         } else if (item->kind == ItemKind::Enum) {
             EnumDef def;
             def.name = item->name;
@@ -34,9 +35,32 @@ Module Builder::lower_module(const ast::Module& m) {
                 for (ast::TypePtr a : v.args) {
                     payload.push_back(resolve_ast_type(a));
                 }
+                if (!payload.empty()) {
+                    def.all_variants_empty = false;
+                }
                 def.variants.emplace_back(v.name, std::move(payload));
             }
             enum_defs_[item->name] = std::move(def);
+        } else if (item->kind == ItemKind::Impl) {
+            // Collect methods from impl blocks.
+            // The impl type is the type being implemented.
+            StrId impl_type_name = kInvalidStrId;
+            if (item->impl_type && !item->impl_type->path.empty()) {
+                impl_type_name = item->impl_type->path[0];
+            }
+            if (impl_type_name != kInvalidStrId) {
+                for (ItemPtr m : item->impl_members) {
+                    if (m && m->kind == ast::ItemKind::Fn) {
+                        // Register: (type, method) -> function name.
+                        // The function name is mangled as type_method.
+                        MethodKey key{impl_type_name, m->name};
+                        std::string mangled = std::string(intern_.get(impl_type_name)) +
+                            "_" + std::string(intern_.get(m->name));
+                        method_table_[key] = intern_.intern(std::string_view(mangled));
+                        type_methods_[impl_type_name].push_back(m->name);
+                    }
+                }
+            }
         }
     }
 
@@ -67,7 +91,25 @@ void Builder::lower_item(const ast::Item& item) {
         case ItemKind::Trait:
         case ItemKind::Impl:
             for (ItemPtr m : item.impl_members) {
-                if (m) lower_fn(*m);
+                if (m) {
+                    // Mangle the method name as type_method.
+                    StrId impl_type_name = kInvalidStrId;
+                    if (item.impl_type && !item.impl_type->path.empty()) {
+                        impl_type_name = item.impl_type->path[0];
+                    }
+                    if (impl_type_name != kInvalidStrId) {
+                        // Save and restore the name.
+                        StrId orig_name = m->name;
+                        const_cast<ast::Item*>(m)->name =
+                            intern_.intern(std::string_view(
+                                std::string(intern_.get(impl_type_name)) +
+                                "_" + std::string(intern_.get(orig_name))));
+                        lower_fn(*m);
+                        const_cast<ast::Item*>(m)->name = orig_name;
+                    } else {
+                        lower_fn(*m);
+                    }
+                }
             }
             break;
         case ItemKind::TypeAlias:
@@ -102,7 +144,12 @@ type::TypePtr Builder::resolve_ast_type(ast::TypePtr t) {
             if (t->path.empty()) return tc_.make_error();
             TypePtr prim = tc_.lookup_primitive(intern_.get(t->path[0]));
             if (prim) return prim;
-            // User-defined type — for v0.3 we treat as opaque struct.
+            // Check if it's a no-payload enum (lowers to i64 tag).
+            auto eit = enum_defs_.find(t->path[0]);
+            if (eit != enum_defs_.end() && eit->second.all_variants_empty) {
+                return tc_.i64();
+            }
+            // User-defined type — struct or payload enum.
             return tc_.make_struct(t->path[0]);
         }
         case ast::TypeKind::Ref:
@@ -417,6 +464,11 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
             for (const auto& [enum_name, def] : enum_defs_) {
                 for (uint32_t vi = 0; vi < def.variants.size(); ++vi) {
                     if (def.variants[vi].first == name_id) {
+                        if (def.all_variants_empty) {
+                            // No-payload enum: just a tag constant.
+                            return emit_const_int(vi, tc_.i64());
+                        }
+                        // Payload-carrying enum: alloca {tag, payload}.
                         Instruction inst;
                         inst.opcode      = Opcode::EnumConstruct;
                         inst.type        = tc_.make_enum(enum_name);
@@ -452,34 +504,70 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
             return fn_->blocks[current_block_].instructions.back().result;
         }
         case ExprKind::MethodCall: {
-            (void)lower_expr(*e.lhs);
+            ValueId recv = lower_expr(*e.lhs);
+            // Resolve the method: look up (type, method) in method_table_.
+            // v0.5: we don't track the type of `recv` precisely, so we
+            // scan all types that have a method with this name.
+            StrId resolved_fn = kInvalidStrId;
+            for (const auto& [type_name, methods] : type_methods_) {
+                for (StrId mname : methods) {
+                    if (mname == e.method_name) {
+                        MethodKey key{type_name, e.method_name};
+                        auto mit = method_table_.find(key);
+                        if (mit != method_table_.end()) {
+                            resolved_fn = mit->second;
+                            break;
+                        }
+                    }
+                }
+                if (resolved_fn != kInvalidStrId) break;
+            }
+
+            if (resolved_fn != kInvalidStrId) {
+                // Lower as a direct call to the resolved function,
+                // with the receiver as the first argument.
+                Instruction call;
+                call.opcode  = Opcode::Call;
+                call.type    = tc_.i64();
+                call.block   = current_block_;
+                call.str_data= resolved_fn;
+                call.operands.push_back(recv);
+                for (ExprPtr a : e.args) {
+                    call.operands.push_back(lower_expr(*a));
+                }
+                call.mem_in  = current_mem_;
+                call.mem_out = fresh_value();
+                call.result  = fresh_value();
+                call.loc     = e.range;
+                current_mem_ = call.mem_out;
+                emit(std::move(call));
+                return fn_->blocks[current_block_].instructions.back().result;
+            }
+
+            // Method not found — emit a placeholder.
             for (ExprPtr a : e.args) (void)lower_expr(*a);
             return kInvalidValue;
         }
         case ExprKind::FieldAccess: {
             ValueId base = lower_expr(*e.lhs);
-            // Look up the field index by name in the struct def.
-            // We need to know the struct type. v0.4: scan all struct
-            // defs for one with a matching field name. This is a hack —
-            // a proper implementation would track the type of `base`.
+            // Look up the field index by name. We scan all struct
+            // defs for one that has a field with the matching name.
             uint32_t field_idx = 0;
             bool found = false;
-            for (const auto& [sname, fields] : struct_defs_) {
-                for (uint32_t i = 0; i < fields.size(); ++i) {
-                    // We don't have field names stored; use the index
-                    // from the AST. v0.4: just use the first struct
-                    // that has enough fields.
-                    (void)sname;
-                    if (e.field_name != kInvalidStrId) {
-                        // Match by scanning the AST struct decl. For
-                        // now, use the index from a linear search.
+            for (const auto& [sname, def] : struct_defs_) {
+                for (uint32_t i = 0; i < def.fields.size(); ++i) {
+                    if (def.fields[i].first == e.field_name) {
+                        field_idx = i;
+                        found = true;
+                        break;
                     }
                 }
+                if (found) break;
             }
-            // v0.4 fallback: emit StructField with index 0. A proper
-            // implementation would resolve the field name to an index
-            // via the struct's declaration.
-            (void)found;
+            if (!found) {
+                // Field not found in any struct — default to 0.
+                field_idx = 0;
+            }
             Instruction inst;
             inst.opcode      = Opcode::StructField;
             inst.type        = tc_.i64();
@@ -595,37 +683,55 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
             ValueId scrutinee = lower_expr(*e.cond);
 
             // Check if the scrutinee is an enum by looking at the
-            // first arm's pattern.
+            // first arm's pattern. A pattern that's a Variant OR a
+            // Binding whose name matches a variant counts.
             bool is_enum_match = false;
             StrId enum_name = kInvalidStrId;
-            if (!e.arms.empty() && e.arms[0].pattern &&
-                e.arms[0].pattern->kind == PatternKind::Variant &&
-                !e.arms[0].pattern->path.empty()) {
-                // Find which enum this variant belongs to.
-                StrId variant_name = e.arms[0].pattern->path[0];
-                for (const auto& [en, def] : enum_defs_) {
-                    for (const auto& [vn, payload] : def.variants) {
-                        if (vn == variant_name) {
-                            is_enum_match = true;
-                            enum_name = en;
-                            break;
+            if (!e.arms.empty() && e.arms[0].pattern) {
+                StrId variant_name = kInvalidStrId;
+                const auto& p = *e.arms[0].pattern;
+                if (p.kind == PatternKind::Variant && !p.path.empty()) {
+                    variant_name = p.path[0];
+                } else if (p.kind == PatternKind::Binding) {
+                    // A bare identifier in a match pattern might be
+                    // a variant name (e.g. `Red` in `match c { Red => ... }`)
+                    // rather than a binding. Check all enum defs.
+                    variant_name = p.name;
+                }
+                if (variant_name != kInvalidStrId) {
+                    for (const auto& [en, def] : enum_defs_) {
+                        for (const auto& [vn, payload] : def.variants) {
+                            if (vn == variant_name) {
+                                is_enum_match = true;
+                                enum_name = en;
+                                break;
+                            }
                         }
+                        if (is_enum_match) break;
                     }
-                    if (is_enum_match) break;
                 }
             }
 
             if (is_enum_match) {
-                // Extract the tag from the scrutinee.
-                Instruction get_tag;
-                get_tag.opcode   = Opcode::EnumGetTag;
-                get_tag.type     = tc_.i64();
-                get_tag.block    = current_block_;
-                get_tag.operands = {scrutinee};
-                get_tag.loc      = e.range;
-                ValueId tag_val = fresh_value();
-                get_tag.result  = tag_val;
-                emit(std::move(get_tag));
+                // For no-payload enums, the scrutinee is already a tag
+                // (i64). For payload enums, extract the tag.
+                ValueId tag_val;
+                auto eit = enum_defs_.find(enum_name);
+                bool empty_enum = eit != enum_defs_.end() &&
+                                  eit->second.all_variants_empty;
+                if (empty_enum) {
+                    tag_val = scrutinee;
+                } else {
+                    Instruction get_tag;
+                    get_tag.opcode   = Opcode::EnumGetTag;
+                    get_tag.type     = tc_.i64();
+                    get_tag.block    = current_block_;
+                    get_tag.operands = {scrutinee};
+                    get_tag.loc      = e.range;
+                    tag_val = fresh_value();
+                    get_tag.result  = tag_val;
+                    emit(std::move(get_tag));
+                }
 
                 // Create the end block where all arms merge.
                 BlockId end_block = fresh_block();
@@ -654,10 +760,17 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
                         ubr.block  = check_block;
                         ubr.blocks = {body_block};
                         emit(std::move(ubr));
-                    } else if (arm.pattern && arm.pattern->kind == PatternKind::Variant) {
-                        // Find the variant index.
-                        StrId vname = arm.pattern->path.empty()
-                            ? kInvalidStrId : arm.pattern->path[0];
+                    } else if (arm.pattern &&
+                               (arm.pattern->kind == PatternKind::Variant ||
+                                arm.pattern->kind == PatternKind::Binding)) {
+                        // Find the variant index by name.
+                        StrId vname = kInvalidStrId;
+                        if (arm.pattern->kind == PatternKind::Variant &&
+                            !arm.pattern->path.empty()) {
+                            vname = arm.pattern->path[0];
+                        } else if (arm.pattern->kind == PatternKind::Binding) {
+                            vname = arm.pattern->name;
+                        }
                         uint32_t vidx = 0;
                         bool found = false;
                         auto eit = enum_defs_.find(enum_name);

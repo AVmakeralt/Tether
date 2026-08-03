@@ -41,6 +41,7 @@
 #include "ssa/mono.hpp"
 #include "ssa/optimizer.hpp"
 #include "ssa/partial_eval.hpp"
+#include "ssa/rewrite.hpp"
 #include "support/arena.hpp"
 #include "support/intern.hpp"
 #include "support/source.hpp"
@@ -201,15 +202,27 @@ int run(Options& opts) {
         if (opts.mode == EmitMode::Check) return 1;
     }
 
-    // Lower each module to SSA (with monomorphization first).
+    // Lower each module to SSA (with rewrite rules + monomorphization first).
     std::vector<tether::ssa::Module> ssa_modules;
     for (const auto& m : loader.modules()) {
         if (!m.ast) continue;
-        // Run monomorphization: instantiate generic functions per
-        // concrete type. This must happen before SSA lowering because
-        // LLVM has no concept of generics.
+        // Step 1: Collect rewrite rules from this module.
+        std::vector<tether::ast::ItemPtr> rewrite_rules;
+        for (tether::ast::ItemPtr item : m.ast->items) {
+            if (item && item->kind == tether::ast::ItemKind::Rewrite) {
+                rewrite_rules.push_back(item);
+            }
+        }
+        // Step 2: Apply rewrite rules to the AST (before monomorphization).
+        if (!rewrite_rules.empty()) {
+            tether::rewrite::Rewriter rewriter(diag, intern, arena);
+            rewriter.apply(const_cast<tether::ast::Module&>(*m.ast),
+                           rewrite_rules);
+        }
+        // Step 3: Run monomorphization.
         tether::mono::Monomorphizer mono(tc, diag, intern, arena);
         auto monomorphized = mono.run(*m.ast);
+        // Step 4: Lower to SSA.
         tether::ssa::Builder builder(tc, diag, intern, arena);
         ssa_modules.push_back(builder.lower_module(*monomorphized));
     }

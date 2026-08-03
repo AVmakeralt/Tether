@@ -63,15 +63,42 @@ private:
     // Arena name -> ArenaId.
     std::unordered_map<StrId, ArenaId> arena_ids_;
 
-    // Struct definitions: name -> list of field types.
-    std::unordered_map<StrId, std::vector<type::TypePtr>> struct_defs_;
+    // Struct definitions: name -> list of (field name, field type).
+    struct StructDef {
+        StrId name;
+        std::vector<std::pair<StrId, type::TypePtr>> fields;
+    };
+    std::unordered_map<StrId, StructDef> struct_defs_;
 
     // Enum definitions: name -> list of (variant name, payload types).
     struct EnumDef {
         StrId name;
         std::vector<std::pair<StrId, std::vector<type::TypePtr>>> variants;
+        // True if all variants have no payload (enum is just a tag).
+        bool all_variants_empty = true;
     };
     std::unordered_map<StrId, EnumDef> enum_defs_;
+
+    // Trait/impl tracking for method dispatch.
+    // Map from (type name, method name) -> mangled function name.
+    // When we see x.method(args), we look up the type of x and find
+    // the concrete function that implements that method.
+    struct MethodKey {
+        StrId type_name;
+        StrId method_name;
+        bool operator==(const MethodKey& o) const {
+            return type_name == o.type_name && method_name == o.method_name;
+        }
+    };
+    struct MethodKeyHash {
+        size_t operator()(const MethodKey& k) const {
+            return k.type_name * 31 + k.method_name;
+        }
+    };
+    std::unordered_map<MethodKey, StrId, MethodKeyHash> method_table_;
+
+    // Map from type name -> list of methods (for type inference).
+    std::unordered_map<StrId, std::vector<StrId>> type_methods_;
 
     // ---- Helpers ----
     ValueId fresh_value() {

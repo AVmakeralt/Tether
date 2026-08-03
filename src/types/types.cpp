@@ -303,6 +303,28 @@ std::string TypeContext::render(TypePtr t) const {
     return "<unknown>";
 }
 
+std::string TypeContext::render_llvm_attrs(TypePtr t) const {
+    if (!t) return "";
+    switch (t->kind) {
+        case Kind::Ref:
+            // ref T: noalias (doesn't alias other pointers — borrow
+            // checker guarantee), nonnull (refs are never null),
+            // readonly (shared ref — can't write through it).
+            // mut ref T: noalias, nonnull, but NOT readonly.
+            if (t->is_mut) {
+                return " noalias nonnull";
+            } else {
+                return " noalias nonnull readonly";
+            }
+        case Kind::RawPtr:
+            // Raw pointers carry no attributes — they're unsafe and
+            // may alias, be null, etc.
+            return "";
+        default:
+            return "";
+    }
+}
+
 std::string TypeContext::render_llvm(TypePtr t) const {
     if (!t) return "void";
     switch (t->kind) {

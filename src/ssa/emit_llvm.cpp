@@ -39,12 +39,14 @@ std::string LlvmEmitter::emit(const Module& mod) {
     for (const auto& ext : mod.externs) {
         out_ += "declare ";
         out_ += ext.return_type ? llvm_type(ext.return_type) : "void";
+        out_ += ext.return_type ? tc_.render_llvm_attrs(ext.return_type) : "";
         out_ += " @";
         out_ += intern_.get(ext.name);
         out_ += "(";
         for (size_t i = 0; i < ext.param_types.size(); ++i) {
             if (i) out_ += ", ";
             out_ += llvm_type(ext.param_types[i]);
+            out_ += tc_.render_llvm_attrs(ext.param_types[i]);
         }
         if (ext.is_variadic) {
             if (!ext.param_types.empty()) out_ += ", ";
@@ -85,17 +87,27 @@ void LlvmEmitter::emit_function(const Function& fn) {
         ret_type = tc_.i64();
     }
     std::string ret_ty = ret_type ? llvm_type(ret_type) : "void";
+    // Return type attributes (for ref returns).
+    std::string ret_attrs = ret_type ? tc_.render_llvm_attrs(ret_type) : "";
 
     out_ += "define ";
     out_ += ret_ty;
+    out_ += ret_attrs;
     out_ += " @";
     out_ += mangled;
     out_ += "(";
     for (size_t i = 0; i < fn.params.size(); ++i) {
         if (i) out_ += ", ";
+        // Resolve param type — integers lower to i64.
+        type::TypePtr pt = i < fn.param_types.size() ? fn.param_types[i] : tc_.i64();
+        if (pt && tc_.is_integer(pt)) pt = tc_.i64();
+        std::string pty = pt ? llvm_type(pt) : "i64";
+        std::string pattrs = pt ? tc_.render_llvm_attrs(pt) : "";
         std::string arg = "%arg" + std::to_string(i);
         reg_map_[fn.params[i]] = arg;
-        out_ += "i64 ";
+        out_ += pty;
+        out_ += pattrs;
+        out_ += " ";
         out_ += arg;
     }
     out_ += ") {\n";
@@ -322,6 +334,8 @@ void LlvmEmitter::emit_instruction(const Instruction& inst,
             std::string args;
             for (size_t i = 0; i < inst.operands.size(); ++i) {
                 if (i) args += ", ";
+                // v0.5: all args are i64 for now; attributes would
+                // require knowing the callee's param types.
                 args += "i64 " + reg_name(inst.operands[i]);
             }
             std::string callee = std::string(intern_.get(inst.str_data));

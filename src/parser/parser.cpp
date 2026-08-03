@@ -151,6 +151,32 @@ ast::ItemPtr Parser::parse_item() {
             return make(std::move(item));
         }
         default: {
+            // Check for contextual 'rewrite' keyword.
+            if (check(TokenKind::Ident) &&
+                intern_.get(current().str_id) == "rewrite") {
+                consume();
+                ast::Item item;
+                item.kind  = ast::ItemKind::Rewrite;
+                item.range = current().range;
+                if (!check(TokenKind::Ident)) {
+                    diag_.error(current().range, "expected rewrite rule name");
+                    return nullptr;
+                }
+                item.name = current().str_id;
+                consume();
+                expect(TokenKind::LBrace, "'{' to open rewrite body");
+                while (!check(TokenKind::RBrace) && !check(TokenKind::Eof)) {
+                    ast::RewriteArm arm;
+                    arm.range = current().range;
+                    arm.pattern = parse_expr();
+                    expect(TokenKind::FatArrow, "'=>' in rewrite arm");
+                    arm.replacement = parse_expr();
+                    item.rewrite_arms.push_back(std::move(arm));
+                    if (!match(TokenKind::Comma)) break;
+                }
+                expect(TokenKind::RBrace, "'}' to close rewrite body");
+                return make(std::move(item));
+            }
             std::string msg = "expected item, got '";
             if (const char* s = token_kind_spelling(current().kind)) msg += s;
             else msg += token_kind_name(current().kind);

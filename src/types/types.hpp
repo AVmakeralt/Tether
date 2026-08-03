@@ -188,6 +188,15 @@ public:
     // emitter.
     std::string render_llvm(TypePtr t) const;
 
+    // Render the LLVM parameter attributes for a type. Returns a
+    // space-prefixed string (or empty if no attributes).
+    //   - ref T:        " noalias nonnull readonly"
+    //   - mut ref T:    " noalias nonnull"
+    //   - *const T:     "" (raw pointers carry no attributes)
+    //   - *mut T:       ""
+    //   - everything else: ""
+    std::string render_llvm_attrs(TypePtr t) const;
+
     Arena&       arena()       { return arena_; }
     InternTable& intern()      { return intern_; }
 

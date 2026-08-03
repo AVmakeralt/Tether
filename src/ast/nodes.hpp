@@ -221,6 +221,16 @@ struct MatchArm {
     SourceRange range;
 };
 
+// A rewrite rule: pattern => replacement.
+// The pattern is an expression that may contain binding variables
+// (identifiers starting with ? or just identifiers in pattern position).
+// The replacement is an expression that can reference those bindings.
+struct RewriteArm {
+    ExprPtr    pattern     = nullptr;
+    ExprPtr    replacement = nullptr;
+    SourceRange range;
+};
+
 class Expr {
 public:
     ExprKind kind = ExprKind::IntLit;
@@ -328,6 +338,7 @@ enum class ItemKind : uint8_t {
     Const,
     Static,
     Extern,
+    Rewrite,       // rewrite Name { pattern => replacement, ... }
 };
 
 struct Field {
@@ -405,6 +416,9 @@ public:
     // Extern: header name (for ffi "..."), declaration body.
     StrId  ffi_header = kInvalidStrId;
     ItemPtr extern_decl = nullptr;
+
+    // Rewrite: list of (pattern, replacement) arms.
+    std::vector<RewriteArm> rewrite_arms;
 };
 
 class Module {
