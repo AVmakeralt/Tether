@@ -38,6 +38,7 @@
 #include "ssa/builder.hpp"
 #include "ssa/emit_llvm.hpp"
 #include "ssa/incremental.hpp"
+#include "ssa/mono.hpp"
 #include "ssa/optimizer.hpp"
 #include "ssa/partial_eval.hpp"
 #include "support/arena.hpp"
@@ -200,12 +201,17 @@ int run(Options& opts) {
         if (opts.mode == EmitMode::Check) return 1;
     }
 
-    // Lower each module to SSA.
+    // Lower each module to SSA (with monomorphization first).
     std::vector<tether::ssa::Module> ssa_modules;
     for (const auto& m : loader.modules()) {
         if (!m.ast) continue;
+        // Run monomorphization: instantiate generic functions per
+        // concrete type. This must happen before SSA lowering because
+        // LLVM has no concept of generics.
+        tether::mono::Monomorphizer mono(tc, diag, intern, arena);
+        auto monomorphized = mono.run(*m.ast);
         tether::ssa::Builder builder(tc, diag, intern, arena);
-        ssa_modules.push_back(builder.lower_module(*m.ast));
+        ssa_modules.push_back(builder.lower_module(*monomorphized));
     }
 
     // Optimize (unless --no-opt).

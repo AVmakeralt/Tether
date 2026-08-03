@@ -63,6 +63,16 @@ private:
     // Arena name -> ArenaId.
     std::unordered_map<StrId, ArenaId> arena_ids_;
 
+    // Struct definitions: name -> list of field types.
+    std::unordered_map<StrId, std::vector<type::TypePtr>> struct_defs_;
+
+    // Enum definitions: name -> list of (variant name, payload types).
+    struct EnumDef {
+        StrId name;
+        std::vector<std::pair<StrId, std::vector<type::TypePtr>>> variants;
+    };
+    std::unordered_map<StrId, EnumDef> enum_defs_;
+
     // ---- Helpers ----
     ValueId fresh_value() {
         if (!fn_) return kInvalidValue;

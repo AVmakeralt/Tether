@@ -56,6 +56,11 @@ const char* opcode_name(Opcode op) {
         case Opcode::ZExt:        return "zext";
         case Opcode::SExt:        return "sext";
         case Opcode::Trunc:       return "trunc";
+        case Opcode::StructConstruct: return "struct-construct";
+        case Opcode::StructField:     return "struct-field";
+        case Opcode::EnumConstruct:   return "enum-construct";
+        case Opcode::EnumGetTag:      return "enum-get-tag";
+        case Opcode::EnumGetPayload:  return "enum-get-payload";
         case Opcode::BoundsCheck: return "bounds-check";
         case Opcode::Unsafe:      return "unsafe";
     }

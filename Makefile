@@ -35,7 +35,8 @@ SSA_SRC := \
     src/ssa/optimizer.cpp \
     src/ssa/emit_llvm.cpp \
     src/ssa/partial_eval.cpp \
-    src/ssa/incremental.cpp
+    src/ssa/incremental.cpp \
+    src/ssa/mono.cpp
 
 TYPES_SRC := src/types/types.cpp
 
@@ -80,7 +81,8 @@ TEST_SRC := \
     tests/test_ast.cpp \
     tests/test_types.cpp \
     tests/test_pipeline.cpp \
-    tests/test_ssa.cpp
+    tests/test_ssa.cpp \
+    tests/test_struct_enum.cpp
 
 bin/tether_tests: $(TEST_SRC) $(COMPILER_SRC) | bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(TEST_SRC) $(COMPILER_SRC) -o $@

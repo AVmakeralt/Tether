@@ -121,6 +121,13 @@ enum class Opcode : uint16_t {
     SExt,            // sign extend
     Trunc,           // truncate
 
+    // ---- Struct / Enum ----
+    StructConstruct, // build a struct from field values
+    StructField,     // extract a field from a struct (by index)
+    EnumConstruct,   // build an enum value (tag + payload)
+    EnumGetTag,      // extract the tag from an enum
+    EnumGetPayload,  // extract the payload from an enum
+
     // ---- Bounds checking ----
     BoundsCheck,     // abort if index >= len; produces new_mem
     // ---- Unsafe marker ----
@@ -164,6 +171,7 @@ struct Instruction {
     ArenaId     arena      = kNoArena;     // Alloc
     RegionId    region     = kStaticRegion;// Borrow, Ref
     bool        is_unsafe  = false;        // marker for unsafe block
+    uint32_t    field_index = 0;           // StructField, EnumConstruct (variant idx)
 
     // ---- For Call ----
     // The callee function name (interned). Direct calls only —

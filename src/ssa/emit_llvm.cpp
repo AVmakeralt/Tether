@@ -1,4 +1,4 @@
-// ssa/emit_llvm.cpp — SSA → LLVM IR text lowering
+// ssa/emit_llvm.cpp — SSA → LLVM IR text lowering with proper basic blocks
 
 #include "ssa/emit_llvm.hpp"
 
@@ -20,9 +20,17 @@ std::string LlvmEmitter::reg_name(ValueId v) {
     return r;
 }
 
+std::string LlvmEmitter::block_label(BlockId b) {
+    auto it = block_labels_.find(b);
+    if (it != block_labels_.end()) return it->second;
+    std::string l = "bb" + std::to_string(b);
+    block_labels_[b] = l;
+    return l;
+}
+
 std::string LlvmEmitter::emit(const Module& mod) {
     out_.clear();
-    out_ += "; Tether SSA → LLVM IR (v0.3)\n";
+    out_ += "; Tether SSA → LLVM IR (v0.4)\n";
     out_ += "; Source module: ";
     out_ += intern_.get(mod.module_name);
     out_ += "\n\n";
@@ -46,7 +54,7 @@ std::string LlvmEmitter::emit(const Module& mod) {
     }
     if (!mod.externs.empty()) out_ += "\n";
 
-    // Emit string globals (collected during function emission).
+    // Emit functions first (collecting string globals).
     std::string function_output;
     for (const auto& fn : mod.functions) {
         reset_function_state();
@@ -71,7 +79,7 @@ void LlvmEmitter::emit_function(const Function& fn) {
     std::string name = std::string(intern_.get(fn.name));
     std::string mangled = "_tether_" + name;
 
-    // Resolve return type — all integers lower to i64 for v0.3.
+    // Resolve return type — all integers lower to i64 for v0.4.
     type::TypePtr ret_type = fn.return_type;
     if (ret_type && tc_.is_integer(ret_type)) {
         ret_type = tc_.i64();
@@ -85,39 +93,34 @@ void LlvmEmitter::emit_function(const Function& fn) {
     out_ += "(";
     for (size_t i = 0; i < fn.params.size(); ++i) {
         if (i) out_ += ", ";
-        // Map param ValueId to %argN.
         std::string arg = "%arg" + std::to_string(i);
         reg_map_[fn.params[i]] = arg;
-        out_ += "i64 ";  // v0.3: all params are i64
+        out_ += "i64 ";
         out_ += arg;
     }
     out_ += ") {\n";
-    out_ += "entry:\n";
 
-    // Map the entry mem token to a placeholder (LLVM doesn't track
-    // memory as a value — it's implicit).
+    // Map the entry mem token.
     if (fn.entry_mem != kInvalidValue) {
-        reg_map_[fn.entry_mem] = "";  // empty = "no register"
+        reg_map_[fn.entry_mem] = "";
     }
 
-    // Emit all blocks. v0.3: flatten all blocks into the entry block
-    // for simplicity. A proper lowering would emit LLVM basic blocks
-    // with branch instructions. For now, we emit block labels as
-    // comments and flatten.
-    bool first_block = true;
+    // Emit each block as an LLVM basic block.
+    // Skip empty blocks (they're dead code). The entry block has no
+    // label; subsequent blocks get one.
+    bool first = true;
     for (const auto& block : fn.blocks) {
-        if (!first_block) {
-            out_ += "; block%";
-            out_ += std::to_string(block.id);
+        // Skip dead blocks (no instructions, or only unreachable).
+        if (block.instructions.empty()) continue;
+        if (!first) {
+            out_ += block_label(block.id);
             out_ += ":\n";
         }
-        first_block = false;
-        for (const auto& inst : block.instructions) {
-            (void)emit_instruction(inst, fn);
-        }
+        first = false;
+        emit_block(block, fn);
     }
 
-    // Ensure terminator.
+    // Ensure there's a terminator.
     out_ += "  ret ";
     out_ += ret_ty;
     if (!tc_.is_void(ret_type)) out_ += " 0";
@@ -125,32 +128,34 @@ void LlvmEmitter::emit_function(const Function& fn) {
     out_ += "}\n\n";
 }
 
-std::string LlvmEmitter::emit_instruction(const Instruction& inst,
-                                          const Function& fn) {
+void LlvmEmitter::emit_block(const Block& block, const Function& fn) {
+    for (const auto& inst : block.instructions) {
+        emit_instruction(inst, fn);
+    }
+}
+
+void LlvmEmitter::emit_instruction(const Instruction& inst,
+                                   const Function& fn) {
     (void)fn;
     switch (inst.opcode) {
         case Opcode::ConstInt: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = add i64 " +
-                      std::to_string(inst.int_data) + ", 0");
-            return r;
+            emit_line(r + " = add i64 " + std::to_string(inst.int_data) + ", 0");
+            break;
         }
         case Opcode::ConstFloat: {
             std::string r = reg_name(inst.result);
             std::ostringstream oss;
-            oss << "  " << r << " = fadd double " << inst.float_data
-                << ", 0.0";
+            oss << r << " = fadd double " << inst.float_data << ", 0.0";
             emit_line(oss.str());
-            return r;
+            break;
         }
         case Opcode::ConstBool: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = add i1 " +
-                      std::to_string(inst.int_data) + ", 0");
-            return r;
+            emit_line(r + " = add i1 " + std::to_string(inst.int_data) + ", 0");
+            break;
         }
         case Opcode::ConstStr: {
-            // Emit a global for the string if not already done.
             auto it = strings_.find(inst.str_data);
             std::string global_name;
             if (it == strings_.end()) {
@@ -161,17 +166,19 @@ std::string LlvmEmitter::emit_instruction(const Instruction& inst,
             }
             std::string r = reg_name(inst.result);
             std::string_view text = intern_.get(inst.str_data);
-            emit_line("  " + r + " = getelementptr [" +
+            emit_line(r + " = getelementptr [" +
                       std::to_string(text.size() + 1) + " x i8], [" +
                       std::to_string(text.size() + 1) + " x i8]* " +
                       global_name + ", i64 0, i64 0");
-            return r;
+            break;
         }
         case Opcode::ConstNull:
-            return "null";
+            if (inst.result != kInvalidValue) {
+                reg_map_[inst.result] = "null";
+            }
+            break;
         case Opcode::ConstArray:
-            // v0.3: arrays not fully supported.
-            return "";
+            break;
 
         case Opcode::Add: case Opcode::Sub: case Opcode::Mul:
         case Opcode::Div: case Opcode::Mod: {
@@ -185,16 +192,15 @@ std::string LlvmEmitter::emit_instruction(const Instruction& inst,
                 default: break;
             }
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = " + op + " i64 " +
+            emit_line(r + " = " + op + " i64 " +
                       reg_name(inst.operands[0]) + ", " +
                       reg_name(inst.operands[1]));
-            return r;
+            break;
         }
         case Opcode::Neg: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = sub i64 0, " +
-                      reg_name(inst.operands[0]));
-            return r;
+            emit_line(r + " = sub i64 0, " + reg_name(inst.operands[0]));
+            break;
         }
         case Opcode::And: case Opcode::Or: case Opcode::Xor:
         case Opcode::Shl: case Opcode::Shr: {
@@ -208,16 +214,15 @@ std::string LlvmEmitter::emit_instruction(const Instruction& inst,
                 default: break;
             }
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = " + op + " i64 " +
+            emit_line(r + " = " + op + " i64 " +
                       reg_name(inst.operands[0]) + ", " +
                       reg_name(inst.operands[1]));
-            return r;
+            break;
         }
         case Opcode::Not: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = xor i64 " +
-                      reg_name(inst.operands[0]) + ", -1");
-            return r;
+            emit_line(r + " = xor i64 " + reg_name(inst.operands[0]) + ", -1");
+            break;
         }
         case Opcode::Eq: case Opcode::Ne: case Opcode::Lt:
         case Opcode::Gt: case Opcode::Le: case Opcode::Ge: {
@@ -232,74 +237,85 @@ std::string LlvmEmitter::emit_instruction(const Instruction& inst,
                 default: break;
             }
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = " + op + " i64 " +
+            emit_line(r + " = " + op + " i64 " +
                       reg_name(inst.operands[0]) + ", " +
                       reg_name(inst.operands[1]));
-            return r;
+            break;
         }
 
         // ---- Memory ----
         case Opcode::Alloc: {
-            // v0.3: lower to an alloca. Arena allocation would lower
-            // to a call to the arena's bump function.
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = alloca i64");
-            return r;
+            emit_line(r + " = alloca i64");
+            break;
         }
         case Opcode::Load: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = load i64, i64* " +
-                      reg_name(inst.operands[0]));
-            return r;
+            emit_line(r + " = load i64, i64* " + reg_name(inst.operands[0]));
+            break;
         }
         case Opcode::Store: {
-            emit_line("  store i64 " + reg_name(inst.operands[1]) +
+            emit_line("store i64 " + reg_name(inst.operands[1]) +
                       ", i64* " + reg_name(inst.operands[0]));
-            return "";
+            break;
         }
         case Opcode::Borrow:
             // Refs are just pointers in LLVM.
-            return reg_name(inst.operands[0]);
+            if (inst.result != kInvalidValue && !inst.operands.empty()) {
+                reg_map_[inst.result] = reg_name(inst.operands[0]);
+            }
+            break;
         case Opcode::Move:
-            // Moves are no-ops at the LLVM level (ownership verified
-            // at SSA level).
-            return reg_name(inst.operands[0]);
+            if (inst.result != kInvalidValue && !inst.operands.empty()) {
+                reg_map_[inst.result] = reg_name(inst.operands[0]);
+            }
+            break;
         case Opcode::Drop:
-            // v0.3: heap drop would be a free() call; arena drop is
-            // handled at the arena's lifetime end.
-            return "";
+            break;
         case Opcode::MemPhi:
-            // Memory phis are resolved by LLVM's own MemorySSA.
-            return "";
+            break;
 
         // ---- Control flow ----
-        case Opcode::Br:
-            emit_line("  br label %L" + std::to_string(inst.blocks[0]));
-            return "";
+        case Opcode::Br: {
+            if (!inst.blocks.empty()) {
+                emit_line("br label %" + block_label(inst.blocks[0]));
+            }
+            break;
+        }
         case Opcode::CondBr: {
-            // v0.3: would emit proper LLVM basic blocks. For now,
-            // flatten by assuming the condition is always true.
-            emit_line("  ; condbr " + reg_name(inst.operands[0]));
-            return "";
+            if (inst.blocks.size() >= 2 && !inst.operands.empty()) {
+                emit_line("br i1 " + reg_name(inst.operands[0]) +
+                          ", label %" + block_label(inst.blocks[0]) +
+                          ", label %" + block_label(inst.blocks[1]));
+            }
+            break;
         }
         case Opcode::Switch:
-            return "";
+            break;
         case Opcode::Ret: {
             if (!inst.operands.empty()) {
-                emit_line("  ret i64 " + reg_name(inst.operands[0]));
+                emit_line("ret i64 " + reg_name(inst.operands[0]));
             } else {
-                emit_line("  ret void");
+                emit_line("ret void");
             }
-            return "";
+            break;
         }
         case Opcode::Unreachable:
-            emit_line("  unreachable");
-            return "";
+            emit_line("unreachable");
+            break;
 
-        case Opcode::Phi:
-            // v0.3: would emit proper phi with incoming values.
-            return reg_name(inst.operands.empty() ? kInvalidValue
-                                                    : inst.operands[0]);
+        case Opcode::Phi: {
+            // Emit: %r = phi i64 [ %v1, %bb1 ], [ %v2, %bb2 ]
+            std::string r = reg_name(inst.result);
+            std::string s = r + " = phi i64 ";
+            for (size_t i = 0; i + 1 < inst.operands.size(); i += 2) {
+                if (i > 0) s += ", ";
+                s += "[ " + reg_name(inst.operands[i]) + ", %" +
+                     block_label(inst.blocks[i / 2]) + " ]";
+            }
+            emit_line(s);
+            break;
+        }
 
         case Opcode::Call: {
             std::string r = reg_name(inst.result);
@@ -309,9 +325,8 @@ std::string LlvmEmitter::emit_instruction(const Instruction& inst,
                 args += "i64 " + reg_name(inst.operands[i]);
             }
             std::string callee = std::string(intern_.get(inst.str_data));
-            emit_line("  " + r + " = call i64 @_tether_" + callee +
-                      "(" + args + ")");
-            return r;
+            emit_line(r + " = call i64 @_tether_" + callee + "(" + args + ")");
+            break;
         }
         case Opcode::TailCall: {
             std::string args;
@@ -320,67 +335,155 @@ std::string LlvmEmitter::emit_instruction(const Instruction& inst,
                 args += "i64 " + reg_name(inst.operands[i]);
             }
             std::string callee = std::string(intern_.get(inst.str_data));
-            emit_line("  tail call i64 @_tether_" + callee +
-                      "(" + args + ")");
-            return "";
+            emit_line("tail call i64 @_tether_" + callee + "(" + args + ")");
+            break;
         }
 
         case Opcode::Ref:
-            // Ref creates a pointer to a local. Lower to alloca.
-            return reg_name(inst.operands[0]);
+            if (inst.result != kInvalidValue && !inst.operands.empty()) {
+                reg_map_[inst.result] = reg_name(inst.operands[0]);
+            }
+            break;
         case Opcode::Deref:
-            return reg_name(inst.operands[0]);
+            if (inst.result != kInvalidValue && !inst.operands.empty()) {
+                reg_map_[inst.result] = reg_name(inst.operands[0]);
+            }
+            break;
         case Opcode::FieldAddr: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = getelementptr i64, i64* " +
+            emit_line(r + " = getelementptr i64, i64* " +
                       reg_name(inst.operands[0]) + ", i64 0");
-            return r;
+            break;
         }
         case Opcode::IndexAddr: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = getelementptr i64, i64* " +
+            emit_line(r + " = getelementptr i64, i64* " +
                       reg_name(inst.operands[0]) + ", i64 " +
                       reg_name(inst.operands[1]));
-            return r;
+            break;
         }
 
         case Opcode::BitCast: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = bitcast i64 " +
+            emit_line(r + " = bitcast i64 " +
                       reg_name(inst.operands[0]) + " to i64");
-            return r;
+            break;
         }
         case Opcode::ZExt: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = zext i64 " +
-                      reg_name(inst.operands[0]) + " to i64");
-            return r;
+            emit_line(r + " = zext i64 " + reg_name(inst.operands[0]) + " to i64");
+            break;
         }
         case Opcode::SExt: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = sext i64 " +
-                      reg_name(inst.operands[0]) + " to i64");
-            return r;
+            emit_line(r + " = sext i64 " + reg_name(inst.operands[0]) + " to i64");
+            break;
         }
         case Opcode::Trunc: {
             std::string r = reg_name(inst.result);
-            emit_line("  " + r + " = trunc i64 " +
-                      reg_name(inst.operands[0]) + " to i64");
-            return r;
+            emit_line(r + " = trunc i64 " + reg_name(inst.operands[0]) + " to i64");
+            break;
         }
 
         case Opcode::BoundsCheck: {
             // Lower to: if idx >= len, trap.
-            // v0.3: we don't have the length here (it's a slice field).
-            // For now, emit a comment.
-            emit_line("  ; bounds-check " + reg_name(inst.operands[0]));
-            return "";
+            // v0.4: we don't have the length here. Emit a comment.
+            emit_line("; bounds-check " + reg_name(inst.operands[0]));
+            break;
         }
         case Opcode::Unsafe:
-            // Marker only — no LLVM equivalent.
-            return "";
+            // Marker only.
+            break;
+
+        case Opcode::StructConstruct: {
+            // Allocate a struct on the stack, store each field.
+            // %r = alloca %struct.Name
+            // store i64 %v0, i64* %r.field0  (via GEP)
+            // ...
+            // For v0.4, structs are represented as a pointer to an
+            // alloca'd region. We emit the struct as { i64, i64, ... }
+            // (all fields widened to i64) for simplicity.
+            std::string struct_name = std::string(intern_.get(inst.type->name));
+            std::string r = reg_name(inst.result);
+            emit_line(r + " = alloca { " +
+                      std::string(inst.operands.size() > 0 ? "i64" : "") +
+                      std::string(inst.operands.size() > 1 ? ", i64" : "") +
+                      std::string(inst.operands.size() > 2 ? ", i64" : "") +
+                      std::string(inst.operands.size() > 3 ? ", i64" : "") +
+                      " }");
+            // Store each field.
+            for (size_t i = 0; i < inst.operands.size() && i < 8; ++i) {
+                std::string field_ptr = fresh_reg();
+                emit_line(field_ptr + " = getelementptr { " +
+                          std::string(inst.operands.size() > 0 ? "i64" : "") +
+                          std::string(inst.operands.size() > 1 ? ", i64" : "") +
+                          std::string(inst.operands.size() > 2 ? ", i64" : "") +
+                          std::string(inst.operands.size() > 3 ? ", i64" : "") +
+                          " }, { " +
+                          std::string(inst.operands.size() > 0 ? "i64" : "") +
+                          std::string(inst.operands.size() > 1 ? ", i64" : "") +
+                          std::string(inst.operands.size() > 2 ? ", i64" : "") +
+                          std::string(inst.operands.size() > 3 ? ", i64" : "") +
+                          " }* " + r + ", i64 0, i32 " + std::to_string(i));
+                emit_line("store i64 " + reg_name(inst.operands[i]) +
+                          ", i64* " + field_ptr);
+            }
+            break;
+        }
+        case Opcode::StructField: {
+            // Load field at index from the struct pointer.
+            // %r = getelementptr { i64, i64 }, { i64, i64 }* %base, i64 0, i32 N
+            // %r2 = load i64, i64* %r
+            std::string field_ptr = fresh_reg();
+            // v0.4: assume 2-field struct for the GEP type. A proper
+            // implementation would track the struct layout.
+            emit_line(field_ptr + " = getelementptr { i64, i64 }, { i64, i64 }* " +
+                      reg_name(inst.operands[0]) + ", i64 0, i32 " +
+                      std::to_string(inst.field_index));
+            std::string r = reg_name(inst.result);
+            emit_line(r + " = load i64, i64* " + field_ptr);
+            break;
+        }
+        case Opcode::EnumConstruct: {
+            // Enums are represented as { i64 tag, i64 payload }.
+            // v0.4: only single-payload or no-payload variants.
+            std::string r = reg_name(inst.result);
+            emit_line(r + " = alloca { i64, i64 }");
+            // Store the tag.
+            std::string tag_ptr = fresh_reg();
+            emit_line(tag_ptr + " = getelementptr { i64, i64 }, { i64, i64 }* " +
+                      r + ", i64 0, i32 0");
+            emit_line("store i64 " + std::to_string(inst.field_index) +
+                      ", i64* " + tag_ptr);
+            // Store the payload (first operand, if any).
+            if (!inst.operands.empty()) {
+                std::string payload_ptr = fresh_reg();
+                emit_line(payload_ptr + " = getelementptr { i64, i64 }, { i64, i64 }* " +
+                          r + ", i64 0, i32 1");
+                emit_line("store i64 " + reg_name(inst.operands[0]) +
+                          ", i64* " + payload_ptr);
+            }
+            break;
+        }
+        case Opcode::EnumGetTag: {
+            // Load the tag field (index 0).
+            std::string tag_ptr = fresh_reg();
+            emit_line(tag_ptr + " = getelementptr { i64, i64 }, { i64, i64 }* " +
+                      reg_name(inst.operands[0]) + ", i64 0, i32 0");
+            std::string r = reg_name(inst.result);
+            emit_line(r + " = load i64, i64* " + tag_ptr);
+            break;
+        }
+        case Opcode::EnumGetPayload: {
+            // Load the payload field (index 1).
+            std::string payload_ptr = fresh_reg();
+            emit_line(payload_ptr + " = getelementptr { i64, i64 }, { i64, i64 }* " +
+                      reg_name(inst.operands[0]) + ", i64 0, i32 1");
+            std::string r = reg_name(inst.result);
+            emit_line(r + " = load i64, i64* " + payload_ptr);
+            break;
+        }
     }
-    return "";
 }
 
 void LlvmEmitter::emit_string_global(StrId str_id, const std::string& name) {
