@@ -1278,6 +1278,15 @@ ast::ExprPtr Parser::parse_primary_expr() {
         case TokenKind::KwWhile:  return parse_while_expr();
         case TokenKind::KwFor:    return parse_for_expr();
         case TokenKind::KwSpawn:  return parse_spawn_expr();
+        case TokenKind::KwComptime: {
+            Token t = current();
+            consume();
+            ast::Expr e;
+            e.kind  = ast::ExprKind::Comptime;
+            e.range = t.range;
+            e.block = parse_block();
+            return make(std::move(e));
+        }
         case TokenKind::KwAlloc:  return parse_alloc_expr();
         case TokenKind::KwUnsafe: {
             ast::Expr e;

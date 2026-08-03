@@ -188,6 +188,9 @@ enum class ExprKind : uint8_t {
     Spawn,
     Await,
 
+    // Compile-time
+    Comptime,   // comptime { ... } — evaluated at compile time
+
     // Misc
     Tuple,
     ArrayLit,

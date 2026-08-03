@@ -53,6 +53,17 @@ private:
     // Whether we're inside an unsafe block.
     bool in_unsafe_ = false;
 
+    // Trait definitions: trait name → list of method signatures.
+    struct TraitMethod {
+        StrId    name;
+        size_t   param_count;
+        bool     has_return;
+    };
+    std::unordered_map<StrId, std::vector<TraitMethod>> traits_;
+
+    // Check that an impl block satisfies its trait (if specified).
+    void check_impl_satisfies_trait(const ast::Item& impl);
+
     void check_item(ast::ItemPtr item);
     void check_fn(ast::ItemPtr item);
     void check_struct(ast::ItemPtr item);

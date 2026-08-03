@@ -320,10 +320,10 @@ void LlvmEmitter::emit_instruction(const Instruction& inst,
             // Emit: %r = phi i64 [ %v1, %bb1 ], [ %v2, %bb2 ]
             std::string r = reg_name(inst.result);
             std::string s = r + " = phi i64 ";
-            for (size_t i = 0; i + 1 < inst.operands.size(); i += 2) {
+            for (size_t i = 0; i < inst.operands.size(); ++i) {
                 if (i > 0) s += ", ";
                 s += "[ " + reg_name(inst.operands[i]) + ", %" +
-                     block_label(inst.blocks[i / 2]) + " ]";
+                     block_label(inst.blocks[i]) + " ]";
             }
             emit_line(s);
             break;

@@ -619,13 +619,14 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
             return kInvalidValue;
         case ExprKind::If: {
             ValueId cond = lower_expr(*e.cond);
+            BlockId cond_block = current_block_;
             BlockId then_block = fresh_block();
             BlockId else_block = fresh_block();
             BlockId end_block  = fresh_block();
 
             Instruction br;
             br.opcode   = Opcode::CondBr;
-            br.block    = current_block_;
+            br.block    = cond_block;
             br.operands = {cond};
             br.blocks   = {then_block, else_block};
             br.loc      = e.range;
@@ -633,45 +634,64 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
 
             // Then block.
             set_block(then_block);
-            add_pred(then_block, current_block_ == then_block ? kInvalidBlock : current_block_);
-            // Actually, set_block already switched. Let me redo the pred logic.
-            // The pred of then_block is the block we just emitted the CondBr in.
-            // We need to track that. Let me restructure.
-            (void)lower_expr(*e.then_branch);
-            if (current_block_ != kInvalidBlock &&
-                !fn_->blocks[current_block_].instructions.empty() &&
-                !fn_->blocks[current_block_].instructions.back().is_terminator()) {
+            ValueId then_result = lower_expr(*e.then_branch);
+            BlockId then_end = current_block_;
+            bool then_terminated = (!fn_->blocks[then_end].instructions.empty() &&
+                                     fn_->blocks[then_end].instructions.back().is_terminator());
+            if (!then_terminated) {
                 Instruction tbr;
                 tbr.opcode = Opcode::Br;
-                tbr.block  = current_block_;
+                tbr.block  = then_end;
                 tbr.blocks = {end_block};
                 emit(std::move(tbr));
             }
-            BlockId then_end = current_block_;
-            ValueId then_mem = current_mem_;
 
             // Else block.
             set_block(else_block);
             ValueId else_result = kInvalidValue;
+            BlockId else_end = else_block;
+            bool else_terminated = true;
             if (e.else_branch) {
                 else_result = lower_expr(*e.else_branch);
-            }
-            if (current_block_ != kInvalidBlock &&
-                !fn_->blocks[current_block_].instructions.empty() &&
-                !fn_->blocks[current_block_].instructions.back().is_terminator()) {
+                else_end = current_block_;
+                else_terminated = (!fn_->blocks[else_end].instructions.empty() &&
+                                    fn_->blocks[else_end].instructions.back().is_terminator());
+                if (!else_terminated) {
+                    Instruction ebr;
+                    ebr.opcode = Opcode::Br;
+                    ebr.block  = else_end;
+                    ebr.blocks = {end_block};
+                    emit(std::move(ebr));
+                }
+            } else {
+                // No else branch — just branch to end.
                 Instruction ebr;
                 ebr.opcode = Opcode::Br;
-                ebr.block  = current_block_;
+                ebr.block  = else_block;
                 ebr.blocks = {end_block};
                 emit(std::move(ebr));
             }
-            BlockId else_end = current_block_;
-            ValueId else_mem = current_mem_;
-            (void)else_result; (void)then_mem; (void)else_mem;
-            (void)then_end; (void)else_end;
 
             // End block.
             set_block(end_block);
+
+            // If both branches produced a value and neither terminated
+            // (e.g. via return), emit a phi to merge them.
+            if (then_result != kInvalidValue && else_result != kInvalidValue &&
+                !then_terminated && !else_terminated) {
+                Instruction phi;
+                phi.opcode   = Opcode::Phi;
+                phi.type     = tc_.i64();
+                phi.block    = end_block;
+                phi.operands = {then_result, else_result};
+                phi.blocks   = {then_end, else_end};
+                phi.loc      = e.range;
+                ValueId result = fresh_value();
+                phi.result  = result;
+                emit(std::move(phi));
+                return result;
+            }
+
             return kInvalidValue;
         }
         case ExprKind::Match: {
@@ -735,7 +755,9 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
 
                 // Create the end block where all arms merge.
                 BlockId end_block = fresh_block();
-                ValueId result = fresh_value();
+
+                // Collect (arm result, arm end block) pairs for the phi.
+                std::vector<std::pair<ValueId, BlockId>> arm_results;
 
                 // For each arm, create a block that compares the tag
                 // against the variant index.
@@ -828,17 +850,40 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
                     // Body block.
                     set_block(body_block);
                     ValueId arm_result = lower_expr(*arm.body);
-                    (void)arm_result;
                     // Branch to end.
-                    Instruction ebr;
-                    ebr.opcode = Opcode::Br;
-                    ebr.block  = body_block;
-                    ebr.blocks = {end_block};
-                    emit(std::move(ebr));
+                    bool arm_terminated = (!fn_->blocks[body_block].instructions.empty() &&
+                                            fn_->blocks[body_block].instructions.back().is_terminator());
+                    if (!arm_terminated) {
+                        Instruction ebr;
+                        ebr.opcode = Opcode::Br;
+                        ebr.block  = body_block;
+                        ebr.blocks = {end_block};
+                        emit(std::move(ebr));
+                    }
+                    if (arm_result != kInvalidValue && !arm_terminated) {
+                        arm_results.emplace_back(arm_result, body_block);
+                    }
                 }
 
                 set_block(end_block);
-                return result;
+
+                // Emit a phi merging all arm results.
+                if (!arm_results.empty()) {
+                    Instruction phi;
+                    phi.opcode = Opcode::Phi;
+                    phi.type   = tc_.i64();
+                    phi.block  = end_block;
+                    for (const auto& [val, blk] : arm_results) {
+                        phi.operands.push_back(val);
+                        phi.blocks.push_back(blk);
+                    }
+                    phi.loc   = e.range;
+                    ValueId result = fresh_value();
+                    phi.result = result;
+                    emit(std::move(phi));
+                    return result;
+                }
+                return kInvalidValue;
             }
 
             // Non-enum match: evaluate the first arm.
@@ -974,8 +1019,15 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
             return kInvalidValue;
         }
         case ExprKind::Spawn:
-            (void)lower_expr(*e.body);
+        case ExprKind::Comptime: {
+            // Lower the block. The partial evaluator will run on the
+            // resulting SSA and fold any constant expressions.
+            lower_block(*e.block);
+            if (e.block && e.block->trailing) {
+                return lower_expr(*e.block->trailing);
+            }
             return kInvalidValue;
+        }
         case ExprKind::Await:
             return lower_expr(*e.lhs);
         case ExprKind::Tuple: {

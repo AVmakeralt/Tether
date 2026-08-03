@@ -72,6 +72,7 @@ const char* expr_kind_name(ExprKind k) {
         case ExprKind::Borrow:      return "borrow";
         case ExprKind::Unsafe:      return "unsafe";
         case ExprKind::Spawn:       return "spawn";
+        case ExprKind::Comptime:    return "comptime";
         case ExprKind::Await:       return "await";
         case ExprKind::Tuple:       return "tuple";
         case ExprKind::ArrayLit:    return "array-lit";
@@ -417,6 +418,10 @@ void Printer::print_expr(ExprPtr e) {
         case ExprKind::Spawn:
             out_ << " ";
             print_expr(e->body);
+            break;
+        case ExprKind::Comptime:
+            out_ << " ";
+            print_block(e->block);
             break;
         case ExprKind::Await:
             out_ << " ";

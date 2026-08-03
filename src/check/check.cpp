@@ -12,6 +12,25 @@ using namespace tether::ast;
 // would clash with ast::type::TypePtr. We use the `type::` prefix instead.
 
 bool TypeChecker::check_module(const ast::Module& m) {
+    // First pass: collect trait definitions.
+    for (ItemPtr item : m.items) {
+        if (!item) continue;
+        if (item->kind == ItemKind::Trait) {
+            std::vector<TraitMethod> methods;
+            for (ItemPtr m : item->trait_members) {
+                if (m && m->kind == ItemKind::Fn) {
+                    TraitMethod tm;
+                    tm.name = m->name;
+                    tm.param_count = m->params.size();
+                    tm.has_return = (m->return_type != nullptr);
+                    methods.push_back(tm);
+                }
+            }
+            traits_[item->name] = std::move(methods);
+        }
+    }
+
+    // Second pass: check items.
     for (ItemPtr item : m.items) {
         check_item(item);
     }
@@ -26,10 +45,12 @@ void TypeChecker::check_item(ItemPtr item) {
         case ItemKind::Enum:      check_enum(item); break;
         case ItemKind::Union:
         case ItemKind::Trait:
-        case ItemKind::Impl:
-            // Members are checked via their own items.
-            for (ItemPtr m : item->impl_members) check_item(m);
             for (ItemPtr m : item->trait_members) check_item(m);
+            break;
+        case ItemKind::Impl:
+            // Check that the impl satisfies its trait (if specified).
+            check_impl_satisfies_trait(*item);
+            for (ItemPtr m : item->impl_members) check_item(m);
             break;
         case ItemKind::TypeAlias:
         case ItemKind::Const:
@@ -37,10 +58,65 @@ void TypeChecker::check_item(ItemPtr item) {
         case ItemKind::Extern:
         case ItemKind::Module:
         case ItemKind::Import:
+        case ItemKind::Rewrite:
             break;
         case ItemKind::Export:
             check_item(item->inner);
             break;
+    }
+}
+
+void TypeChecker::check_impl_satisfies_trait(const ast::Item& impl) {
+    // If the impl doesn't specify a trait, nothing to check.
+    if (!impl.impl_trait) return;
+    if (impl.impl_trait->path.empty()) return;
+
+    StrId trait_name = impl.impl_trait->path[0];
+    auto it = traits_.find(trait_name);
+    if (it == traits_.end()) {
+        // Unknown trait — not necessarily an error (might be defined
+        // in another module). Skip.
+        return;
+    }
+    const auto& required_methods = it->second;
+
+    // Collect methods provided by this impl.
+    std::unordered_map<StrId, const ast::Item*> provided;
+    for (ItemPtr m : impl.impl_members) {
+        if (m && m->kind == ItemKind::Fn) {
+            provided[m->name] = m;
+        }
+    }
+
+    // Check that every required method is provided with a matching
+    // signature.
+    for (const auto& req : required_methods) {
+        auto pit = provided.find(req.name);
+        if (pit == provided.end()) {
+            diag_.error(impl.range,
+                std::string("impl does not satisfy trait: missing method '") +
+                std::string(intern_.get(req.name)) + "'");
+            continue;
+        }
+        const ast::Item* provided_fn = pit->second;
+        // Check parameter count.
+        if (provided_fn->params.size() != req.param_count) {
+            diag_.error(provided_fn->range,
+                std::string("method '") + std::string(intern_.get(req.name)) +
+                "' has wrong parameter count: expected " +
+                std::to_string(req.param_count) + ", got " +
+                std::to_string(provided_fn->params.size()));
+        }
+        // Check return type presence.
+        if (provided_fn->return_type && !req.has_return) {
+            diag_.error(provided_fn->range,
+                std::string("method '") + std::string(intern_.get(req.name)) +
+                "' should not have a return type");
+        } else if (!provided_fn->return_type && req.has_return) {
+            diag_.error(provided_fn->range,
+                std::string("method '") + std::string(intern_.get(req.name)) +
+                "' is missing required return type");
+        }
     }
 }
 
@@ -423,9 +499,15 @@ type::TypePtr TypeChecker::check_expr(ExprPtr e, type::TypePtr expected) {
             break;
         }
         case ExprKind::Spawn:
-            (void)check_expr(e->body);
-            actual = tc_.void_type();
+        case ExprKind::Comptime: {
+            check_block(e->block, expected);
+            if (e->block && e->block->trailing) {
+                actual = check_expr(e->block->trailing, expected);
+            } else {
+                actual = tc_.void_type();
+            }
             break;
+        }
         case ExprKind::Await:
             actual = check_expr(e->lhs);
             break;

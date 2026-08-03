@@ -641,7 +641,11 @@ TypePtr Resolver::resolve_expr(ExprPtr e) {
             }
             return tc_.void_type();
         case ExprKind::Spawn:
-            (void)resolve_expr(e->body);
+        case ExprKind::Comptime:
+            resolve_block(e->block);
+            if (e->block && e->block->trailing) {
+                return resolve_expr(e->block->trailing);
+            }
             return tc_.void_type();
         case ExprKind::Await:
             return resolve_expr(e->lhs);

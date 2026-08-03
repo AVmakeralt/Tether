@@ -59,31 +59,124 @@ ast::ModulePtr Monomorphizer::run(const ast::Module& m) {
 }
 
 std::vector<MonoKey> Monomorphizer::collect_instantiations(const ast::Module& m) {
-    // v0.4: we don't yet parse explicit type arguments at call sites
-    // (max<i32>(3, 4)). Instead, we infer the type arguments from
-    // the argument types. For simplicity, we look for calls to generic
-    // functions and record them with all-Int type arguments.
+    // Infer type arguments from call-site argument expressions.
+    // For each call to a generic function, we determine the type of
+    // each argument expression and substitute it for the corresponding
+    // type parameter.
     //
-    // A proper implementation would:
-    //   1. Parse explicit type arguments (max<i32>(3, 4))
-    //   2. Or infer from argument types during type checking
-    //
-    // For v0.4, we just collect calls to generic functions and
-    // instantiate them with a single i64 type argument.
+    // Type inference rules (v0.6):
+    //   - IntLit → i64 (default; could be refined by context)
+    //   - FloatLit → f64
+    //   - BoolLit → bool
+    //   - StringLit → *const u8
+    //   - CharLit → u32
+    //   - Ident → look up the binding's type from the local scope
+    //   - Call → the callee's return type
+    //   - everything else → i64 (fallback)
+
+    // Build a map of generic function name → type params.
+    std::unordered_map<StrId, const ast::Item*> generic_fns;
+    for (ItemPtr item : m.items) {
+        if (item && item->kind == ItemKind::Fn && is_generic(*item)) {
+            generic_fns[item->name] = item;
+        }
+    }
+
+    // Build a map of function name → return type (for Call inference).
+    // v0.6: we only resolve primitive return types.
+    auto infer_expr_type = [&](ast::ExprPtr e,
+                               const std::unordered_map<StrId, type::TypePtr>& locals)
+        -> type::TypePtr {
+        if (!e) return tc_.i64();
+        switch (e->kind) {
+            case ExprKind::IntLit:    return tc_.i64();
+            case ExprKind::FloatLit:  return tc_.f64();
+            case ExprKind::BoolLit:   return tc_.boolean();
+            case ExprKind::StringLit: return tc_.make_raw_ptr(tc_.u8(), false);
+            case ExprKind::CharLit:   return tc_.u32();
+            case ExprKind::Ident:
+                if (!e->path.empty()) {
+                    auto it = locals.find(e->path[0]);
+                    if (it != locals.end()) return it->second;
+                }
+                return tc_.i64();
+            case ExprKind::Call: {
+                // Look up the callee's return type.
+                if (e->lhs && e->lhs->kind == ExprKind::Ident &&
+                    !e->lhs->path.empty()) {
+                    for (ItemPtr item : m.items) {
+                        if (item && item->kind == ItemKind::Fn &&
+                            item->name == e->lhs->path[0] &&
+                            item->return_type) {
+                            // Resolve the return type.
+                            if (!item->return_type->path.empty()) {
+                                auto t = tc_.lookup_primitive(
+                                    intern_.get(item->return_type->path[0]));
+                                if (t) return t;
+                            }
+                        }
+                    }
+                }
+                return tc_.i64();
+            }
+            default:
+                return tc_.i64();
+        }
+    };
+
     std::vector<MonoKey> keys;
 
     for (ItemPtr item : m.items) {
         if (!item || item->kind != ItemKind::Fn || !item->body) continue;
+
+        // Build a local scope for this function: param name → type.
+        std::unordered_map<StrId, type::TypePtr> locals;
+        for (const auto& p : item->params) {
+            if (p.name != kInvalidStrId && p.type && !p.type->path.empty()) {
+                auto t = tc_.lookup_primitive(intern_.get(p.type->path[0]));
+                if (t) locals[p.name] = t;
+            }
+        }
+        // Also collect let-bindings as we walk (simple scan).
+        for (auto s : item->body->stmts) {
+            if (s && s->kind == ast::StmtKind::Let &&
+                s->let_name != kInvalidStrId && s->let_type &&
+                !s->let_type->path.empty()) {
+                auto t = tc_.lookup_primitive(intern_.get(s->let_type->path[0]));
+                if (t) locals[s->let_name] = t;
+            }
+        }
+
         // Walk the body looking for calls to generic functions.
-        // v0.4: simplified — just collect function names that are
-        // called and check if they're generic.
-        std::vector<StrId> called_names;
         auto collect_calls = [&](ast::ExprPtr e, auto& self) -> void {
             if (!e) return;
             if (e->kind == ExprKind::Call && e->lhs &&
                 e->lhs->kind == ExprKind::Ident &&
                 !e->lhs->path.empty()) {
-                called_names.push_back(e->lhs->path[0]);
+                StrId callee = e->lhs->path[0];
+                auto git = generic_fns.find(callee);
+                if (git != generic_fns.end()) {
+                    const ast::Item& gfn = *git->second;
+                    // Infer type args from the argument expressions.
+                    MonoKey key;
+                    key.function_name = callee;
+                    // For each type parameter, find the first argument
+                    // whose position maps to it and infer the type.
+                    // v0.6: we assume type params appear in order in
+                    // the parameter list. So type param T_i corresponds
+                    // to parameter i, and we infer from argument i.
+                    for (size_t i = 0; i < gfn.type_params.size(); ++i) {
+                        if (i < e->args.size()) {
+                            key.type_args.push_back(
+                                infer_expr_type(e->args[i], locals));
+                        } else {
+                            key.type_args.push_back(tc_.i64());
+                        }
+                    }
+                    if (instantiations_.find(key) == instantiations_.end()) {
+                        keys.push_back(key);
+                    }
+                }
             }
             for (auto a : e->args) self(a, self);
             if (e->lhs) self(e->lhs, self);
@@ -92,6 +185,13 @@ std::vector<MonoKey> Monomorphizer::collect_instantiations(const ast::Module& m)
             if (e->then_branch) self(e->then_branch, self);
             if (e->else_branch) self(e->else_branch, self);
             if (e->body) self(e->body, self);
+            if (e->block) {
+                for (auto s : e->block->stmts) {
+                    if (s && s->expr) self(s->expr, self);
+                    if (s && s->let_value) self(s->let_value, self);
+                }
+                if (e->block->trailing) self(e->block->trailing, self);
+            }
         };
         for (auto s : item->body->stmts) {
             if (s && s->expr) collect_calls(s->expr, collect_calls);
@@ -99,26 +199,6 @@ std::vector<MonoKey> Monomorphizer::collect_instantiations(const ast::Module& m)
         }
         if (item->body->trailing) {
             collect_calls(item->body->trailing, collect_calls);
-        }
-
-        // Check which called names are generic functions.
-        for (ItemPtr fn_item : m.items) {
-            if (!fn_item || fn_item->kind != ItemKind::Fn) continue;
-            if (!is_generic(*fn_item)) continue;
-            for (StrId called : called_names) {
-                if (called == fn_item->name) {
-                    MonoKey key;
-                    key.function_name = fn_item->name;
-                    // v0.4: instantiate with i64 for each type param.
-                    for (size_t i = 0; i < fn_item->type_params.size(); ++i) {
-                        key.type_args.push_back(tc_.i64());
-                    }
-                    // Check if we already have this instantiation.
-                    if (instantiations_.find(key) == instantiations_.end()) {
-                        keys.push_back(key);
-                    }
-                }
-            }
         }
     }
 
@@ -180,13 +260,50 @@ void Monomorphizer::rewrite_expr(ast::Expr& e) {
     if (e.kind == ExprKind::Call && e.lhs &&
         e.lhs->kind == ExprKind::Ident && !e.lhs->path.empty()) {
         StrId callee = e.lhs->path[0];
-        // Check if this is a generic function that was instantiated.
+        // Re-infer the type args at this call site to find the
+        // correct instantiation.
+        // v0.6: we don't have the local scope here, so we try each
+        // instantiation and pick the first one whose type args are
+        // compatible with the argument expressions.
+        // A proper implementation would pass the scope through.
+        //
+        // For now: if there's only one instantiation of this function,
+        // use it. If there are multiple, we need to infer — but we
+        // can't without the scope. Default to the first.
+        std::vector<StrId> candidates;
         for (const auto& [key, new_name] : instantiations_) {
             if (key.function_name == callee) {
-                // Rewrite the call to use the instantiated name.
-                const_cast<ast::Expr*>(e.lhs)->path[0] = new_name;
-                break;
+                candidates.push_back(new_name);
             }
+        }
+        if (!candidates.empty()) {
+            // Infer argument types at this call site.
+            // We do a simple inference: IntLit→i64, BoolLit→bool,
+            // FloatLit→f64, else→i64.
+            std::vector<type::TypePtr> arg_types;
+            for (auto a : e.args) {
+                if (!a) { arg_types.push_back(tc_.i64()); continue; }
+                switch (a->kind) {
+                    case ExprKind::IntLit:    arg_types.push_back(tc_.i64()); break;
+                    case ExprKind::BoolLit:   arg_types.push_back(tc_.boolean()); break;
+                    case ExprKind::FloatLit:  arg_types.push_back(tc_.f64()); break;
+                    case ExprKind::CharLit:   arg_types.push_back(tc_.u32()); break;
+                    case ExprKind::StringLit: arg_types.push_back(tc_.make_raw_ptr(tc_.u8(), false)); break;
+                    default:                  arg_types.push_back(tc_.i64()); break;
+                }
+            }
+            // Find the instantiation whose type args match.
+            StrId best = candidates[0];
+            for (const auto& [key, new_name] : instantiations_) {
+                if (key.function_name != callee) continue;
+                if (key.type_args.size() != arg_types.size()) continue;
+                bool match = true;
+                for (size_t i = 0; i < key.type_args.size(); ++i) {
+                    if (key.type_args[i] != arg_types[i]) { match = false; break; }
+                }
+                if (match) { best = new_name; break; }
+            }
+            const_cast<ast::Expr*>(e.lhs)->path[0] = best;
         }
     }
 
