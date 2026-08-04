@@ -1,0 +1,70 @@
+// compiler/ssa/builder.tether — SSA construction
+//
+// Toolkit for building SSA form. Provides phi placement (using the
+// semi-pruned SSA algorithm) and renaming.
+
+module compiler::ssa::builder
+
+import compiler::cfg::cfg
+import std::collections::densemap
+import std::collections::bitset
+
+struct SSABuilder {
+    cfg: cfg::CFG,
+    // Dominance frontier for each block.
+    df: Vector<bitset::BitSet>,
+    // Variable definitions reaching each block.
+    defs: Vector<bitset::BitSet>,
+}
+
+impl SSABuilder {
+    fn new(cfg: cfg::CFG) -> SSABuilder {
+        let num = cfg.graph.num_nodes()
+        let mut df = Vector::new()
+        let mut defs = Vector::new()
+        let mut i: u64 = 0
+        while i < num {
+            df.push(bitset::BitSet::new(num))
+            defs.push(bitset::BitSet::new(1024))
+            i = i + 1
+        }
+        return SSABuilder {
+            cfg: cfg,
+            df: df,
+            defs: defs,
+        }
+    }
+
+    // Compute the dominance frontier for each block.
+    // DF(b) = { y | b dominates a predecessor of y, but b does not
+    //           strictly dominate y }
+    fn compute_dominance_frontier(self) {
+        let doms = self.cfg.dominators()
+        let num = self.cfg.graph.num_nodes()
+
+        let mut i: u64 = 0
+        while i < num {
+            let preds = self.cfg.graph.predecessors(i)
+            if preds.len() >= 2 {
+                let mut j: u64 = 0
+                while j < preds.len() {
+                    let runner = preds.get(j).unwrap()
+                    let mut r = runner
+                    while r != doms.get(i).unwrap() {
+                        self.df.get(r).set(i)
+                        r = doms.get(r).unwrap()
+                    }
+                    j = j + 1
+                }
+            }
+            i = i + 1
+        }
+    }
+
+    // Place phi nodes: for each variable v defined in block b, add a
+    // phi for v at every block in DF+(b).
+    fn place_phis(self) {
+        // v0.1: simplified — a full implementation iterates over all
+        // variables and uses the worklist algorithm from Cytron et al.
+    }
+}

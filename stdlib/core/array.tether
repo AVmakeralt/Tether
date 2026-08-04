@@ -1,0 +1,36 @@
+// std/core/array.tether — fixed-size arrays
+
+module std::core::array
+
+// Array<T, N> is a fixed-size array. Unlike Slice, it owns its data.
+// In Tether, [T; N] is the builtin array type; this module provides
+// utility functions on it.
+
+fn len<T, N>(arr: [T; N]) -> u64 {
+    return N
+}
+
+fn first<T, N>(arr: [T; N]) -> Option<T> {
+    if N > 0 {
+        return Some(arr[0])
+    }
+    return None
+}
+
+fn last<T, N>(arr: [T; N]) -> Option<T> {
+    if N > 0 {
+        return Some(arr[N - 1])
+    }
+    return None
+}
+
+fn get<T, N>(arr: [T; N], index: u64) -> Option<T> {
+    if index < N {
+        return Some(arr[index])
+    }
+    return None
+}
+
+fn as_slice<T, N>(arr: [T; N]) -> Slice<T> {
+    return Slice::new(arr, N)
+}

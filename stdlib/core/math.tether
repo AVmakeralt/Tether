@@ -1,0 +1,54 @@
+// std/core/math.tether — math functions
+
+module std::core::math
+
+extern fn sqrt(x: f64) -> f64
+extern fn sin(x: f64) -> f64
+extern fn cos(x: f64) -> f64
+extern fn tan(x: f64) -> f64
+extern fn pow(base: f64, exp: f64) -> f64
+extern fn exp(x: f64) -> f64
+extern fn log(x: f64) -> f64
+extern fn log2(x: f64) -> f64
+extern fn log10(x: f64) -> f64
+extern fn floor(x: f64) -> f64
+extern fn ceil(x: f64) -> f64
+extern fn round(x: f64) -> f64
+extern fn abs_f64(x: f64) -> f64
+extern fn abs_i64(x: i64) -> i64
+
+fn min(a: i64, b: i64) -> i64 {
+    return if a < b { a } else { b }
+}
+
+fn max(a: i64, b: i64) -> i64 {
+    return if a > b { a } else { b }
+}
+
+fn clamp(x: i64, lo: i64, hi: i64) -> i64 {
+    return min(max(x, lo), hi)
+}
+
+fn div_ceil(a: u64, b: u64) -> u64 {
+    return (a + b - 1) / b
+}
+
+fn align_up(value: u64, align: u64) -> u64 {
+    return (value + align - 1) & ~(align - 1)
+}
+
+fn is_power_of_two(x: u64) -> bool {
+    return x != 0 && (x & (x - 1)) == 0
+}
+
+fn next_power_of_two(x: u64) -> u64 {
+    if x == 0 { return 1 }
+    let mut v = x - 1
+    v = v | (v >> 1)
+    v = v | (v >> 2)
+    v = v | (v >> 4)
+    v = v | (v >> 8)
+    v = v | (v >> 16)
+    v = v | (v >> 32)
+    return v + 1
+}

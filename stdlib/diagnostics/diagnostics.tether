@@ -1,0 +1,123 @@
+// std/diagnostics/diagnostics.tether — diagnostic types
+//
+// Every compiler writes this. Providing it once means the diagnostic
+// format is consistent across tools that use the Tether toolkit.
+
+module std::diagnostics::diagnostics
+
+enum Severity {
+    Error,
+    Warning,
+    Note,
+}
+
+struct Location {
+    file: u32,
+    line: u32,
+    column: u32,
+}
+
+struct Span {
+    start: Location,
+    end: Location,
+}
+
+struct Label {
+    span: Span,
+    text: u64,  // StrId into an InternTable
+}
+
+struct FixIt {
+    span: Span,
+    replacement: u64,  // StrId
+}
+
+struct Diagnostic {
+    severity: Severity,
+    span: Span,
+    message: u64,  // StrId
+    labels: Vector<Label>,
+    fixits: Vector<FixIt>,
+}
+
+impl Diagnostic {
+    fn error(span: Span, message: u64) -> Diagnostic {
+        return Diagnostic {
+            severity: Severity::Error,
+            span: span,
+            message: message,
+            labels: Vector::new(),
+            fixits: Vector::new(),
+        }
+    }
+
+    fn warning(span: Span, message: u64) -> Diagnostic {
+        return Diagnostic {
+            severity: Severity::Warning,
+            span: span,
+            message: message,
+            labels: Vector::new(),
+            fixits: Vector::new(),
+        }
+    }
+
+    fn note(span: Span, message: u64) -> Diagnostic {
+        return Diagnostic {
+            severity: Severity::Note,
+            span: span,
+            message: message,
+            labels: Vector::new(),
+            fixits: Vector::new(),
+        }
+    }
+
+    fn add_label(self, label: Label) {
+        self.labels.push(label)
+    }
+
+    fn add_fixit(self, fixit: FixIt) {
+        self.fixits.push(fixit)
+    }
+
+    fn is_error(self) -> bool {
+        match self.severity {
+            Error   => true,
+            Warning => false,
+            Note    => false,
+        }
+    }
+}
+
+struct DiagnosticEmitter {
+    diagnostics: Vector<Diagnostic>,
+    num_errors: u64,
+}
+
+impl DiagnosticEmitter {
+    fn new() -> DiagnosticEmitter {
+        return DiagnosticEmitter {
+            diagnostics: Vector::new(),
+            num_errors: 0,
+        }
+    }
+
+    fn emit(self, d: Diagnostic) {
+        if d.is_error() {
+            self.num_errors = self.num_errors + 1
+        }
+        self.diagnostics.push(d)
+    }
+
+    fn has_errors(self) -> bool {
+        return self.num_errors > 0
+    }
+
+    fn error_count(self) -> u64 {
+        return self.num_errors
+    }
+
+    fn clear(self) {
+        self.diagnostics.clear()
+        self.num_errors = 0
+    }
+}

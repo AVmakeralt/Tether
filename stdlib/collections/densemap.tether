@@ -1,0 +1,143 @@
+// std/collections/densemap.tether — DenseMap<K, V>
+//
+// A cache-friendly hash map. Uses open addressing with linear probing.
+// Keys and values are stored in separate arrays for cache locality.
+// Based on LLVM's DenseMap design.
+
+module std::collections::densemap
+
+struct DenseMap<K, V> {
+    buckets: *mut Bucket<K, V>,
+    num_entries: u64,
+    num_buckets: u64,
+}
+
+struct Bucket<K, V> {
+    key: K,
+    value: V,
+    occupied: bool,
+    tombstone: bool,
+}
+
+impl<K, V> DenseMap<K, V> {
+    fn new() -> DenseMap<K, V> {
+        return DenseMap::with_capacity(16)
+    }
+
+    fn with_capacity(cap: u64) -> DenseMap<K, V> {
+        unsafe {
+            let size = cap * sizeof<Bucket<K, V>>()
+            let p = malloc(size) as *mut Bucket<K, V>
+            // Zero-initialize: occupied = false, tombstone = false.
+            let mut i: u64 = 0
+            while i < cap {
+                (*(p + i)).occupied = false
+                (*(p + i)).tombstone = false
+                i = i + 1
+            }
+            return DenseMap {
+                buckets: p,
+                num_entries: 0,
+                num_buckets: cap,
+            }
+        }
+    }
+
+    fn len(self) -> u64 {
+        return self.num_entries
+    }
+
+    fn is_empty(self) -> bool {
+        return self.num_entries == 0
+    }
+
+    fn insert(self, key: K, value: V) {
+        if self.num_entries * 4 >= self.num_buckets * 3 {
+            self.grow()
+        }
+        let hash = self.hash_key(key)
+        let mut idx = hash % self.num_buckets
+        unsafe {
+            loop {
+                let bucket = self.buckets + idx
+                if !bucket.occupied || bucket.tombstone {
+                    bucket.key = key
+                    bucket.value = value
+                    bucket.occupied = true
+                    bucket.tombstone = false
+                    self.num_entries = self.num_entries + 1
+                    return
+                }
+                idx = (idx + 1) % self.num_buckets
+            }
+        }
+    }
+
+    fn get(self, key: K) -> Option<V> {
+        let hash = self.hash_key(key)
+        let mut idx = hash % self.num_buckets
+        unsafe {
+            loop {
+                let bucket = self.buckets + idx
+                if !bucket.occupied {
+                    return None
+                }
+                if bucket.occupied && !bucket.tombstone {
+                    if self.keys_equal(bucket.key, key) {
+                        return Some(bucket.value)
+                    }
+                }
+                idx = (idx + 1) % self.num_buckets
+            }
+        }
+    }
+
+    fn grow(self) {
+        let old_buckets = self.buckets
+        let old_count = self.num_buckets
+        self.num_buckets = self.num_buckets * 2
+        self.num_entries = 0
+        unsafe {
+            self.buckets = malloc(self.num_buckets * sizeof<Bucket<K, V>>()) as *mut Bucket<K, V>
+            let mut i: u64 = 0
+            while i < self.num_buckets {
+                (*(self.buckets + i)).occupied = false
+                (*(self.buckets + i)).tombstone = false
+                i = i + 1
+            }
+            i = 0
+            while i < old_count {
+                let old = old_buckets + i
+                if old.occupied && !old.tombstone {
+                    self.insert(old.key, old.value)
+                }
+                i = i + 1
+            }
+            free(old_buckets as *mut u8)
+        }
+    }
+
+    fn hash_key(self, key: K) -> u64 {
+        // v0.1: use the key's bits directly. A proper implementation
+        // would call K::hash().
+        unsafe {
+            return (key as u64) * 1099511628211
+        }
+    }
+
+    fn keys_equal(self, a: K, b: K) -> bool {
+        unsafe {
+            return a == b
+        }
+    }
+
+    fn drop(self) {
+        unsafe {
+            free(self.buckets as *mut u8)
+        }
+    }
+}
+
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)
+extern fn sizeof<T>() -> u64

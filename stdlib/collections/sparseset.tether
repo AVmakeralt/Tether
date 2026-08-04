@@ -1,0 +1,98 @@
+// std/collections/sparseset.tether — SparseSet
+//
+// A set optimized for dense integer keys with fast iteration and
+// fast clear. Used heavily in register allocators and graph coloring.
+// O(1) insert, O(1) remove, O(1) clear, O(n) iteration.
+
+module std::collections::sparseset
+
+struct SparseSet {
+    sparse: *mut u64,   // sparse[key] = index into dense
+    dense: *mut u64,    // dense[index] = key
+    dense_vals: *mut u64, // dense_vals[index] = value (optional)
+    count: u64,
+    capacity: u64,
+}
+
+impl SparseSet {
+    fn new(capacity: u64) -> SparseSet {
+        unsafe {
+            let s = malloc(capacity * 8) as *mut u64
+            let d = malloc(capacity * 8) as *mut u64
+            let dv = malloc(capacity * 8) as *mut u64
+            let mut i: u64 = 0
+            while i < capacity {
+                *(s + i) = 0xFFFFFFFFFFFFFFFF
+                i = i + 1
+            }
+            return SparseSet {
+                sparse: s,
+                dense: d,
+                dense_vals: dv,
+                count: 0,
+                capacity: capacity,
+            }
+        }
+    }
+
+    fn len(self) -> u64 {
+        return self.count
+    }
+
+    fn is_empty(self) -> bool {
+        return self.count == 0
+    }
+
+    fn insert(self, key: u64) {
+        unsafe {
+            if *(self.sparse + key) < self.count && *(self.dense + *(self.sparse + key)) == key {
+                return  // Already present.
+            }
+            *(self.sparse + key) = self.count
+            *(self.dense + self.count) = key
+            self.count = self.count + 1
+        }
+    }
+
+    fn contains(self, key: u64) -> bool {
+        unsafe {
+            let idx = *(self.sparse + key)
+            return idx < self.count && *(self.dense + idx) == key
+        }
+    }
+
+    fn remove(self, key: u64) {
+        unsafe {
+            if !self.contains(key) {
+                return
+            }
+            let idx = *(self.sparse + key)
+            let last = *(self.dense + (self.count - 1))
+            *(self.dense + idx) = last
+            *(self.sparse + last) = idx
+            self.count = self.count - 1
+        }
+    }
+
+    // O(1) clear — just reset the count.
+    fn clear(self) {
+        self.count = 0
+    }
+
+    fn get(self, index: u64) -> u64 {
+        unsafe {
+            return *(self.dense + index)
+        }
+    }
+
+    fn drop(self) {
+        unsafe {
+            free(self.sparse as *mut u8)
+            free(self.dense as *mut u8)
+            free(self.dense_vals as *mut u8)
+        }
+    }
+}
+
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)

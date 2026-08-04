@@ -1,0 +1,43 @@
+// std/core/string.tether — String type
+//
+// A growable UTF-8 string. For now, this wraps a Vector<u8>.
+
+module std::core::string
+
+struct String {
+    data: Vector<u8>,
+}
+
+impl String {
+    fn new() -> String {
+        return String { data: Vector::new() }
+    }
+
+    fn from(s: *const u8) -> String {
+        let mut result = String::new()
+        unsafe {
+            let mut p = s
+            while *p != 0 {
+                result.data.push(*p)
+                p = p + 1
+            }
+        }
+        return result
+    }
+
+    fn len(self) -> u64 {
+        return self.data.len()
+    }
+
+    fn is_empty(self) -> bool {
+        return self.data.is_empty()
+    }
+
+    fn push_byte(self, b: u8) {
+        self.data.push(b)
+    }
+
+    fn as_ptr(self) -> *const u8 {
+        return self.data.ptr as *const u8
+    }
+}

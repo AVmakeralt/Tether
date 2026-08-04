@@ -1,0 +1,113 @@
+// std/memory/interner.tether — InternTable
+//
+// String/symbol interning. Every unique string is stored once and
+// referred to by a 32-bit StrId. This is how compilers handle
+// identifiers: hashing and comparing StrIds is O(1).
+
+module std::memory::interner
+
+struct InternTable {
+    strings: *mut *mut u8,
+    lengths: *mut u64,
+    count: u64,
+    cap: u64,
+    // Hash map for lookup. v0.1: linear scan.
+}
+
+impl InternTable {
+    fn new() -> InternTable {
+        unsafe {
+            return InternTable {
+                strings: malloc(256 * 8) as *mut *mut u8,
+                lengths: malloc(256 * 8) as *mut u64,
+                count: 1,  // slot 0 = empty string
+                cap: 256,
+            }
+        }
+    }
+
+    fn intern(self, s: *const u8) -> u32 {
+        // Compute length.
+        unsafe {
+            let mut len: u64 = 0
+            let mut p = s
+            while *p != 0 {
+                len = len + 1
+                p = p + 1
+            }
+            // Check if already interned.
+            let mut i: u64 = 1
+            while i < self.count {
+                if *(self.lengths + i) == len {
+                    let mut j: u64 = 0
+                    let mut match = true
+                    while j < len {
+                        if *(*(self.strings + i) + j) != *(s + j) {
+                            match = false
+                        }
+                        j = j + 1
+                    }
+                    if match {
+                        return i as u32
+                    }
+                }
+                i = i + 1
+            }
+            // Not found — add it.
+            if self.count >= self.cap {
+                self.grow()
+            }
+            let dst = malloc(len + 1)
+            let mut j: u64 = 0
+            while j < len {
+                *(dst + j) = *(s + j)
+                j = j + 1
+            }
+            *(dst + len) = 0
+            *(self.strings + self.count) = dst as *mut u8
+            *(self.lengths + self.count) = len
+            let id = self.count as u32
+            self.count = self.count + 1
+            return id
+        }
+    }
+
+    fn get(self, id: u32) -> *const u8 {
+        unsafe {
+            return *(self.strings + id) as *const u8
+        }
+    }
+
+    fn grow(self) {
+        unsafe {
+            self.cap = self.cap * 2
+            let new_strings = malloc(self.cap * 8) as *mut *mut u8
+            let new_lengths = malloc(self.cap * 8) as *mut u64
+            let mut i: u64 = 0
+            while i < self.count {
+                *(new_strings + i) = *(self.strings + i)
+                *(new_lengths + i) = *(self.lengths + i)
+                i = i + 1
+            }
+            free(self.strings as *mut u8)
+            free(self.lengths as *mut u8)
+            self.strings = new_strings
+            self.lengths = new_lengths
+        }
+    }
+
+    fn drop(self) {
+        unsafe {
+            let mut i: u64 = 1
+            while i < self.count {
+                free(*(self.strings + i) as *mut u8)
+                i = i + 1
+            }
+            free(self.strings as *mut u8)
+            free(self.lengths as *mut u8)
+        }
+    }
+}
+
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)

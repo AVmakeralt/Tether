@@ -1,0 +1,70 @@
+// std/core/io.tether — I/O primitives
+
+module std::core::io
+
+extern fn printf(fmt: *const u8, ...) -> i32
+extern fn fprintf(stream: *mut u8, fmt: *const u8, ...) -> i32
+extern fn puts(s: *const u8) -> i32
+extern fn fwrite(ptr: *const u8, size: u64, count: u64, stream: *mut u8) -> u64
+
+// Standard streams (opaque pointers).
+fn stdout() -> *mut u8 { unsafe { return 1 as *mut u8 } }
+fn stderr() -> *mut u8 { unsafe { return 2 as *mut u8 } }
+fn stdin() -> *mut u8 { unsafe { return 0 as *mut u8 } }
+
+fn print(s: *const u8) {
+    puts(s)
+}
+
+fn println(s: *const u8) {
+    puts(s)
+}
+
+// Write a single byte to stdout.
+fn write_byte(b: u8) {
+    unsafe {
+        let buf: [u8; 1] = [b]
+        fwrite(buf, 1, 1, stdout())
+    }
+}
+
+// A simple buffered writer.
+struct BufWriter {
+    buf: Vector<u8>,
+    target: *mut u8,
+}
+
+impl BufWriter {
+    fn new(target: *mut u8) -> BufWriter {
+        return BufWriter {
+            buf: Vector::with_capacity(4096),
+            target: target,
+        }
+    }
+
+    fn write_byte(self, b: u8) {
+        if self.buf.len() >= 4096 {
+            self.flush()
+        }
+        self.buf.push(b)
+    }
+
+    fn write_str(self, s: *const u8) {
+        unsafe {
+            let mut p = s
+            while *p != 0 {
+                self.write_byte(*p)
+                p = p + 1
+            }
+        }
+    }
+
+    fn flush(self) {
+        unsafe {
+            if self.buf.len() > 0 {
+                fwrite(self.buf.ptr as *const u8, 1, self.buf.len(), self.target)
+                self.buf.clear()
+            }
+        }
+    }
+}

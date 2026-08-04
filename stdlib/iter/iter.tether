@@ -1,0 +1,205 @@
+// std/iter/iter.tether — lazy iterator trait + adapters
+//
+// Stolen from Rust, unapologetically. Compiler code constantly does:
+//
+//   functions()
+//       .filter(...)
+//       .map(...)
+//       .enumerate(...)
+//       .zip(...)
+//       .collect(...)
+//
+// A lazy iterator system makes optimization passes cleaner without
+// sacrificing performance. Each adapter wraps the previous iterator;
+// nothing runs until collect() pulls values.
+
+module std::iter
+
+// The core iterator trait. Every iterator implements this.
+trait Iterator<T> {
+    fn next(self) -> Option<T>
+}
+
+// ---- Adapters ----
+
+// Map: transform each element.
+struct Map<I, T, U> {
+    inner: I,
+    f: fn(T) -> U,
+}
+
+impl<I, T, U> Iterator<U> for Map<I, T, U> {
+    fn next(self) -> Option<U> {
+        match self.inner.next() {
+            Some(v) => Some(self.f(v)),
+            None    => None,
+        }
+    }
+}
+
+// Filter: keep only elements that pass the predicate.
+struct Filter<I, T> {
+    inner: I,
+    pred: fn(T) -> bool,
+}
+
+impl<I, T> Iterator<T> for Filter<I, T> {
+    fn next(self) -> Option<T> {
+        loop {
+            match self.inner.next() {
+                Some(v) => {
+                    if self.pred(v) {
+                        return Some(v)
+                    }
+                }
+                None => return None
+            }
+        }
+    }
+}
+
+// Enumerate: pair each element with its index.
+struct Enumerate<I, T> {
+    inner: I,
+    index: u64,
+}
+
+impl<I, T> Iterator<(u64, T)> for Enumerate<I, T> {
+    fn next(self) -> Option<(u64, T)> {
+        match self.inner.next() {
+            Some(v) => {
+                let i = self.index
+                self.index = self.index + 1
+                return Some((i, v))
+            }
+            None => None
+        }
+    }
+}
+
+// Zip: pair elements from two iterators.
+struct Zip<A, B, T, U> {
+    a: A,
+    b: B,
+}
+
+impl<A, B, T, U> Iterator<(T, U)> for Zip<A, B, T, U> {
+    fn next(self) -> Option<(T, U)> {
+        match self.a.next() {
+            Some(x) => {
+                match self.b.next() {
+                    Some(y) => Some((x, y)),
+                    None    => None,
+                }
+            }
+            None => None,
+        }
+    }
+}
+
+// Take: yield at most N elements.
+struct Take<I, T> {
+    inner: I,
+    remaining: u64,
+}
+
+impl<I, T> Iterator<T> for Take<I, T> {
+    fn next(self) -> Option<T> {
+        if self.remaining == 0 {
+            return None
+        }
+        self.remaining = self.remaining - 1
+        return self.inner.next()
+    }
+}
+
+// Skip: skip the first N elements.
+struct Skip<I, T> {
+    inner: I,
+    to_skip: u64,
+}
+
+impl<I, T> Iterator<T> for Skip<I, T> {
+    fn next(self) -> Option<T> {
+        while self.to_skip > 0 {
+            self.to_skip = self.to_skip - 1
+            match self.inner.next() {
+                Some(_) => {},
+                None    => return None,
+            }
+        }
+        return self.inner.next()
+    }
+}
+
+// Chain: yield elements from two iterators in sequence.
+struct Chain<A, B, T> {
+    a: A,
+    b: B,
+    on_a: bool,
+}
+
+impl<A, B, T> Iterator<T> for Chain<A, B, T> {
+    fn next(self) -> Option<T> {
+        if self.on_a {
+            match self.a.next() {
+                Some(v) => return Some(v),
+                None    => self.on_a = false,
+            }
+        }
+        return self.b.next()
+    }
+}
+
+// ---- Extension trait: gives every Iterator the adapter methods ----
+
+trait IterExt<T> {
+    fn map<U>(self, f: fn(T) -> U) -> Map<Self, T, U>
+    fn filter(self, pred: fn(T) -> bool) -> Filter<Self, T>
+    fn enumerate(self) -> Enumerate<Self, T>
+    fn zip<U>(self, other: Self) -> Zip<Self, Self, T, U>
+    fn take(self, n: u64) -> Take<Self, T>
+    fn skip(self, n: u64) -> Skip<Self, T>
+    fn chain(self, other: Self) -> Chain<Self, Self, T>
+    fn collect(self) -> Vector<T>
+}
+
+impl<I, T> IterExt<T> for I {
+    fn map<U>(self, f: fn(T) -> U) -> Map<I, T, U> {
+        return Map { inner: self, f: f }
+    }
+
+    fn filter(self, pred: fn(T) -> bool) -> Filter<I, T> {
+        return Filter { inner: self, pred: pred }
+    }
+
+    fn enumerate(self) -> Enumerate<I, T> {
+        return Enumerate { inner: self, index: 0 }
+    }
+
+    fn zip<U>(self, other: I) -> Zip<I, I, T, U> {
+        return Zip { a: self, b: other }
+    }
+
+    fn take(self, n: u64) -> Take<I, T> {
+        return Take { inner: self, remaining: n }
+    }
+
+    fn skip(self, n: u64) -> Skip<I, T> {
+        return Skip { inner: self, to_skip: n }
+    }
+
+    fn chain(self, other: I) -> Chain<I, I, T> {
+        return Chain { a: self, b: other, on_a: true }
+    }
+
+    fn collect(self) -> Vector<T> {
+        let result = Vector::new()
+        loop {
+            match self.next() {
+                Some(v) => result.push(v),
+                None    => return result,
+            }
+        }
+    }
+}

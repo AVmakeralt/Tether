@@ -1,0 +1,38 @@
+// tests/test_stdlib.tether — test that stdlib modules parse and check
+//
+// This is a .tether file, not a C++ test. It imports stdlib modules
+// and uses them. If it parses and type-checks, the stdlib is wired up.
+
+module test_stdlib
+
+import std::core::option
+import std::core::result
+import std::core::math
+import std::core::hash
+
+fn test_option() -> i32 {
+    let x = Some(42)
+    let y = x.unwrap()
+    return y
+}
+
+fn test_result() -> i32 {
+    let r = Ok(10)
+    return r.unwrap()
+}
+
+fn test_math() -> i32 {
+    let m = math::min(3, 7)
+    let n = math::max(3, 7)
+    let c = math::clamp(5, 0, 10)
+    return m + n + c
+}
+
+fn test_hash() -> i32 {
+    let h = fnv1a(0 as *const u8, 0)
+    return h as i32
+}
+
+fn main() -> i32 {
+    return test_option() + test_result() + test_math()
+}

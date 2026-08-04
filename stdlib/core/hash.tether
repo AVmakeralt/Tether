@@ -1,0 +1,39 @@
+// std/core/hash.tether — hashing
+
+module std::core::hash
+
+trait Hash {
+    fn hash(self) -> u64
+}
+
+// FNV-1a hash for byte slices.
+fn fnv1a(data: *const u8, len: u64) -> u64 {
+    let mut h: u64 = 1469598103934665603
+    unsafe {
+        let mut i: u64 = 0
+        while i < len {
+            h = h ^ *(data + i)
+            h = h * 1099511628211
+            i = i + 1
+        }
+    }
+    return h
+}
+
+impl Hash for u64 {
+    fn hash(self) -> u64 {
+        return self * 1099511628211
+    }
+}
+
+impl Hash for i64 {
+    fn hash(self) -> u64 {
+        return (self as u64) * 1099511628211
+    }
+}
+
+impl Hash for bool {
+    fn hash(self) -> u64 {
+        return if self { 1 } else { 0 }
+    }
+}

@@ -1,0 +1,77 @@
+// std/parser/cursor.tether — source cursor
+
+module std::parser::cursor
+
+struct Cursor {
+    source: *const u8,
+    pos: u64,
+    end: u64,
+}
+
+impl Cursor {
+    fn new(source: *const u8, length: u64) -> Cursor {
+        return Cursor {
+            source: source,
+            pos: 0,
+            end: length,
+        }
+    }
+
+    fn peek(self) -> u8 {
+        if self.pos >= self.end {
+            return 0
+        }
+        unsafe {
+            return *(self.source + self.pos)
+        }
+    }
+
+    fn peek_at(self, offset: u64) -> u8 {
+        if self.pos + offset >= self.end {
+            return 0
+        }
+        unsafe {
+            return *(self.source + self.pos + offset)
+        }
+    }
+
+    fn advance(self) -> u8 {
+        if self.pos >= self.end {
+            return 0
+        }
+        unsafe {
+            let c = *(self.source + self.pos)
+            self.pos = self.pos + 1
+            return c
+        }
+    }
+
+    fn eof(self) -> bool {
+        return self.pos >= self.end
+    }
+
+    fn position(self) -> u64 {
+        return self.pos
+    }
+
+    fn skip_while(self, pred: fn(u8) -> bool) {
+        while !self.eof() && pred(self.peek()) {
+            self.advance()
+        }
+    }
+
+    fn starts_with(self, s: *const u8) -> bool {
+        unsafe {
+            let mut i: u64 = 0
+            let mut p = s
+            while *p != 0 {
+                if self.peek_at(i) != *p {
+                    return false
+                }
+                i = i + 1
+                p = p + 1
+            }
+            return true
+        }
+    }
+}

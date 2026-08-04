@@ -1,0 +1,100 @@
+// std/graph/graph.tether — directed graph
+//
+// A directed graph with adjacency lists. This is the workhorse data
+// structure for compiler CFGs, data-flow graphs, and dependency
+// graphs. Every compiler reimplements graph algorithms; this module
+// provides them once, correctly.
+
+module std::graph::graph
+
+struct Graph<N, E> {
+    nodes: Vector<Node<N>>,
+    edges: Vector<Edge<E>>,
+}
+
+struct Node<N> {
+    data: N,
+    succs: Vector<u64>,   // edge indices
+    preds: Vector<u64>,   // edge indices
+}
+
+struct Edge<E> {
+    from: u64,
+    to: u64,
+    data: E,
+}
+
+impl<N, E> Graph<N, E> {
+    fn new() -> Graph<N, E> {
+        return Graph {
+            nodes: Vector::new(),
+            edges: Vector::new(),
+        }
+    }
+
+    fn add_node(self, data: N) -> u64 {
+        let id = self.nodes.len()
+        self.nodes.push(Node {
+            data: data,
+            succs: Vector::new(),
+            preds: Vector::new(),
+        })
+        return id
+    }
+
+    fn add_edge(self, from: u64, to: u64, data: E) -> u64 {
+        let id = self.edges.len()
+        self.edges.push(Edge {
+            from: from,
+            to: to,
+            data: data,
+        })
+        self.nodes.get(from).succs.push(id)
+        self.nodes.get(to).preds.push(id)
+        return id
+    }
+
+    fn num_nodes(self) -> u64 {
+        return self.nodes.len()
+    }
+
+    fn num_edges(self) -> u64 {
+        return self.edges.len()
+    }
+
+    fn node_data(self, id: u64) -> N {
+        return self.nodes.get(id).data
+    }
+
+    fn edge_data(self, id: u64) -> E {
+        return self.edges.get(id).data
+    }
+
+    fn successors(self, id: u64) -> Vector<u64> {
+        let mut result = Vector::new()
+        unsafe {
+            let node = self.nodes.get(id)
+            let mut i: u64 = 0
+            while i < node.succs.len() {
+                let edge_id = *node.succs.ptr
+                result.push(self.edges.get(edge_id).to)
+                i = i + 1
+            }
+        }
+        return result
+    }
+
+    fn predecessors(self, id: u64) -> Vector<u64> {
+        let mut result = Vector::new()
+        unsafe {
+            let node = self.nodes.get(id)
+            let mut i: u64 = 0
+            while i < node.preds.len() {
+                let edge_id = *node.preds.ptr
+                result.push(self.edges.get(edge_id).from)
+                i = i + 1
+            }
+        }
+        return result
+    }
+}

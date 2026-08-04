@@ -1,0 +1,55 @@
+// std/core/alloc.tether — allocation interface
+//
+// Tether's spec mandates that every allocation states where it came
+// from. This module defines the Allocator trait and the built-in
+// heap allocator. Arena allocation lives in std::memory::arena.
+
+module std::core::alloc
+
+// An allocator. Every allocation goes through one of these.
+trait Allocator {
+    // Allocate `size` bytes with `align` alignment. Returns a pointer
+    // to the allocated memory, or null on failure.
+    fn alloc(self, size: u64, align: u64) -> *mut u8
+
+    // Deallocate `ptr` of `size` bytes with `align` alignment.
+    fn dealloc(self, ptr: *mut u8, size: u64, align: u64)
+}
+
+// The global heap allocator. Uses the system malloc/free.
+struct HeapAllocator {}
+
+impl Allocator for HeapAllocator {
+    fn alloc(self, size: u64, align: u64) -> *mut u8 {
+        unsafe {
+            return malloc(size)
+        }
+    }
+
+    fn dealloc(self, ptr: *mut u8, size: u64, align: u64) {
+        unsafe {
+            free(ptr)
+        }
+    }
+}
+
+// Convenience: allocate one T on the heap.
+fn box<T>(val: T) -> *mut T {
+    unsafe {
+        let p = malloc(sizeof<T>()) as *mut T
+        *p = val
+        return p
+    }
+}
+
+// Convenience: free a heap-allocated T.
+fn unbox<T>(p: *mut T) {
+    unsafe {
+        free(p as *mut u8)
+    }
+}
+
+// C runtime declarations.
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)
+extern fn realloc(ptr: *mut u8, size: u64) -> *mut u8

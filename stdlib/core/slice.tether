@@ -1,0 +1,77 @@
+// std/core/slice.tether — Slice<T>
+//
+// A bounds-checked view into contiguous storage. Carries a pointer
+// and a length. The compiler inserts bounds checks on indexing.
+
+module std::core::slice
+
+struct Slice<T> {
+    ptr: *const T,
+    len: u64,
+}
+
+impl<T> Slice<T> {
+    fn new(ptr: *const T, len: u64) -> Slice<T> {
+        return Slice { ptr: ptr, len: len }
+    }
+
+    fn len(self) -> u64 {
+        return self.len
+    }
+
+    fn is_empty(self) -> bool {
+        return self.len == 0
+    }
+
+    fn get(self, index: u64) -> Option<T> {
+        if index < self.len {
+            unsafe {
+                return Some(*self.ptr)
+            }
+        }
+        return None
+    }
+
+    fn first(self) -> Option<T> {
+        if self.len > 0 {
+            unsafe {
+                return Some(*self.ptr)
+            }
+        }
+        return None
+    }
+
+    fn last(self) -> Option<T> {
+        if self.len > 0 {
+            unsafe {
+                return Some(*(self.ptr + (self.len - 1)))
+            }
+        }
+        return None
+    }
+
+    fn iter(self) -> SliceIter<T> {
+        return SliceIter {
+            ptr: self.ptr,
+            end: self.ptr + self.len,
+        }
+    }
+}
+
+struct SliceIter<T> {
+    ptr: *const T,
+    end: *const T,
+}
+
+impl<T> SliceIter<T> {
+    fn next(self) -> Option<T> {
+        if self.ptr < self.end {
+            unsafe {
+                let val = *self.ptr
+                self.ptr = self.ptr + 1
+                return Some(val)
+            }
+        }
+        return None
+    }
+}

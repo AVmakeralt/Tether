@@ -1,0 +1,174 @@
+// std/graph/algorithms.tether — graph algorithms
+//
+// Every compiler rewrites these algorithms repeatedly. Providing them
+// once means compiler authors can focus on the passes that use them,
+// not the algorithms themselves.
+
+module std::graph::algorithms
+
+import std::graph::graph
+import std::collections::bitset
+import std::collections::stack
+import std::collections::queue
+
+// Depth-first search. Returns nodes in DFS order starting from `start`.
+fn dfs(g: graph::Graph, start: u64) -> Vector<u64> {
+    let mut result = Vector::new()
+    let visited = bitset::BitSet::new(g.num_nodes())
+    let stack = stack::Stack::new()
+    stack.push(start)
+
+    while !stack.is_empty() {
+        let node = stack.pop().unwrap()
+        if visited.test(node) {
+            continue
+        }
+        visited.set(node)
+        result.push(node)
+
+        // Push successors in reverse order so they're visited in order.
+        let succs = g.successors(node)
+        let mut i = succs.len()
+        while i > 0 {
+            i = i - 1
+            stack.push(succs.get(i).unwrap())
+        }
+    }
+
+    return result
+}
+
+// Breadth-first search. Returns nodes in BFS order starting from `start`.
+fn bfs(g: graph::Graph, start: u64) -> Vector<u64> {
+    let mut result = Vector::new()
+    let visited = bitset::BitSet::new(g.num_nodes())
+    let q = queue::Queue::new()
+    q.enqueue(start)
+    visited.set(start)
+
+    while !q.is_empty() {
+        let node = q.dequeue().unwrap()
+        result.push(node)
+
+        let succs = g.successors(node)
+        let mut i: u64 = 0
+        while i < succs.len() {
+            let succ = succs.get(i).unwrap()
+            if !visited.test(succ) {
+                visited.set(succ)
+                q.enqueue(succ)
+            }
+            i = i + 1
+        }
+    }
+
+    return result
+}
+
+// Topological sort. Returns nodes in topological order, or an empty
+// vector if the graph has a cycle.
+fn toposort(g: graph::Graph) -> Vector<u64> {
+    let num = g.num_nodes()
+    let in_degree = unsafe { malloc(num * 8) as *mut u64 }
+    let result = Vector::new()
+    let q = queue::Queue::new()
+
+    // Compute in-degrees.
+    unsafe {
+        let mut i: u64 = 0
+        while i < num {
+            *(in_degree + i) = 0
+            i = i + 1
+        }
+        i = 0
+        while i < num {
+            let succs = g.successors(i)
+            let mut j: u64 = 0
+            while j < succs.len() {
+                let s = succs.get(j).unwrap()
+                *(in_degree + s) = *(in_degree + s) + 1
+                j = j + 1
+            }
+            i = i + 1
+        }
+    }
+
+    // Enqueue nodes with in-degree 0.
+    unsafe {
+        let mut i: u64 = 0
+        while i < num {
+            if *(in_degree + i) == 0 {
+                q.enqueue(i)
+            }
+            i = i + 1
+        }
+    }
+
+    // Process.
+    while !q.is_empty() {
+        let node = q.dequeue().unwrap()
+        result.push(node)
+        let succs = g.successors(node)
+        unsafe {
+            let mut j: u64 = 0
+            while j < succs.len() {
+                let s = succs.get(j).unwrap()
+                *(in_degree + s) = *(in_degree + s) - 1
+                if *(in_degree + s) == 0 {
+                    q.enqueue(s)
+                }
+                j = j + 1
+            }
+        }
+    }
+
+    unsafe {
+        free(in_degree as *mut u8)
+    }
+
+    // If not all nodes are in the result, there's a cycle.
+    if result.len() != num {
+        return Vector::new()
+    }
+
+    return result
+}
+
+// Postorder traversal: visit all descendants before the node itself.
+fn postorder(g: graph::Graph, start: u64) -> Vector<u64> {
+    let mut result = Vector::new()
+    let visited = bitset::BitSet::new(g.num_nodes())
+    postorder_visit(g, start, visited, result)
+    return result
+}
+
+fn postorder_visit(g: graph::Graph, node: u64, visited: bitset::BitSet,
+                   result: Vector<u64>) {
+    if visited.test(node) {
+        return
+    }
+    visited.set(node)
+    let succs = g.successors(node)
+    let mut i: u64 = 0
+    while i < succs.len() {
+        postorder_visit(g, succs.get(i).unwrap(), visited, result)
+        i = i + 1
+    }
+    result.push(node)
+}
+
+// Reverse postorder: the reverse of postorder. This is a topological
+// order for DAGs and is used for forward data-flow analysis.
+fn reverse_postorder(g: graph::Graph, start: u64) -> Vector<u64> {
+    let po = postorder(g, start)
+    let mut result = Vector::new()
+    let mut i = po.len()
+    while i > 0 {
+        i = i - 1
+        result.push(po.get(i).unwrap())
+    }
+    return result
+}
+
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)

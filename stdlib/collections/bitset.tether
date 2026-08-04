@@ -1,0 +1,125 @@
+// std/collections/bitset.tether — BitSet
+//
+// A fixed-size bitset. Useful for representing sets of small integers
+// (register sets, dominator sets, etc.).
+
+module std::collections::bitset
+
+struct BitSet {
+    bits: *mut u64,
+    num_bits: u64,
+}
+
+impl BitSet {
+    fn new(num_bits: u64) -> BitSet {
+        let num_words = (num_bits + 63) / 64
+        unsafe {
+            let p = malloc(num_words * 8) as *mut u64
+            let mut i: u64 = 0
+            while i < num_words {
+                *(p + i) = 0
+                i = i + 1
+            }
+            return BitSet { bits: p, num_bits: num_bits }
+        }
+    }
+
+    fn len(self) -> u64 {
+        return self.num_bits
+    }
+
+    fn set(self, index: u64) {
+        unsafe {
+            let word = index / 64
+            let bit = index % 64
+            *(self.bits + word) = *(self.bits + word) | (1 << bit)
+        }
+    }
+
+    fn clear(self, index: u64) {
+        unsafe {
+            let word = index / 64
+            let bit = index % 64
+            *(self.bits + word) = *(self.bits + word) & ~(1 << bit)
+        }
+    }
+
+    fn test(self, index: u64) -> bool {
+        unsafe {
+            let word = index / 64
+            let bit = index % 64
+            return (*(self.bits + word) & (1 << bit)) != 0
+        }
+    }
+
+    fn set_all(self) {
+        unsafe {
+            let num_words = (self.num_bits + 63) / 64
+            let mut i: u64 = 0
+            while i < num_words {
+                *(self.bits + i) = 0xFFFFFFFFFFFFFFFF
+                i = i + 1
+            }
+        }
+    }
+
+    fn clear_all(self) {
+        unsafe {
+            let num_words = (self.num_bits + 63) / 64
+            let mut i: u64 = 0
+            while i < num_words {
+                *(self.bits + i) = 0
+                i = i + 1
+            }
+        }
+    }
+
+    fn count(self) -> u64 {
+        unsafe {
+            let num_words = (self.num_bits + 63) / 64
+            let mut count: u64 = 0
+            let mut i: u64 = 0
+            while i < num_words {
+                // Popcount.
+                let mut v = *(self.bits + i)
+                v = v - ((v >> 1) & 0x5555555555555555)
+                v = (v & 0x3333333333333333) + ((v >> 2) & 0x3333333333333333)
+                v = (v + (v >> 4)) & 0x0F0F0F0F0F0F0F0F
+                count = count + (v * 0x0101010101010101 >> 56)
+                i = i + 1
+            }
+            return count
+        }
+    }
+
+    fn union_with(self, other: BitSet) {
+        unsafe {
+            let num_words = (self.num_bits + 63) / 64
+            let mut i: u64 = 0
+            while i < num_words {
+                *(self.bits + i) = *(self.bits + i) | *(other.bits + i)
+                i = i + 1
+            }
+        }
+    }
+
+    fn intersect_with(self, other: BitSet) {
+        unsafe {
+            let num_words = (self.num_bits + 63) / 64
+            let mut i: u64 = 0
+            while i < num_words {
+                *(self.bits + i) = *(self.bits + i) & *(other.bits + i)
+                i = i + 1
+            }
+        }
+    }
+
+    fn drop(self) {
+        unsafe {
+            free(self.bits as *mut u8)
+        }
+    }
+}
+
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)

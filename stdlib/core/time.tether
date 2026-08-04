@@ -1,0 +1,27 @@
+// std/core/time.tether — time primitives
+
+module std::core::time
+
+extern fn clock() -> u64
+extern fn time() -> u64
+
+struct Duration {
+    secs: u64,
+    nanos: u64,
+}
+
+struct Instant {
+    ticks: u64,
+}
+
+impl Instant {
+    fn now() -> Instant {
+        return Instant { ticks: clock() }
+    }
+
+    fn elapsed(self) -> Duration {
+        let now = Instant::now()
+        let diff = now.ticks - self.ticks
+        return Duration { secs: diff / 1000000000, nanos: diff % 1000000000 }
+    }
+}

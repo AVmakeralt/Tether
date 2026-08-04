@@ -1,0 +1,48 @@
+// std/collections/stack.tether — Stack<T>
+//
+// A LIFO stack backed by a Vector.
+
+module std::collections::stack
+
+struct Stack<T> {
+    data: Vector<T>,
+}
+
+impl<T> Stack<T> {
+    fn new() -> Stack<T> {
+        return Stack { data: Vector::new() }
+    }
+
+    fn push(self, val: T) {
+        self.data.push(val)
+    }
+
+    fn pop(self) -> Option<T> {
+        return self.data.pop()
+    }
+
+    fn peek(self) -> Option<T> {
+        if self.data.len() > 0 {
+            unsafe {
+                return Some(*(self.data.ptr + (self.data.len() - 1)))
+            }
+        }
+        return None
+    }
+
+    fn len(self) -> u64 {
+        return self.data.len()
+    }
+
+    fn is_empty(self) -> bool {
+        return self.data.is_empty()
+    }
+
+    fn clear(self) {
+        self.data.clear()
+    }
+
+    fn drop(self) {
+        self.data.drop()
+    }
+}

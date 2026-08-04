@@ -1,0 +1,85 @@
+// std/parser/source.tether — source file management
+
+module std::parser::source
+
+struct SourceFile {
+    id: u32,
+    name: u64,  // StrId
+    content: *const u8,
+    length: u64,
+    line_starts: Vector<u64>,
+}
+
+impl SourceFile {
+    fn new(id: u32, name: u64, content: *const u8, length: u64) -> SourceFile {
+        let mut sf = SourceFile {
+            id: id,
+            name: name,
+            content: content,
+            length: length,
+            line_starts: Vector::new(),
+        }
+        sf.compute_line_starts()
+        return sf
+    }
+
+    fn compute_line_starts(self) {
+        self.line_starts.push(0)
+        unsafe {
+            let mut i: u64 = 0
+            while i < self.length {
+                if *(self.content + i) == 10 {  // '\n'
+                    self.line_starts.push(i + 1)
+                }
+                i = i + 1
+            }
+        }
+    }
+
+    fn line_col(self, offset: u32) -> (u32, u32) {
+        // Binary search for the largest line_start <= offset.
+        let mut lo: u64 = 0
+        let mut hi: u64 = self.line_starts.len()
+        while lo + 1 < hi {
+            let mid = lo + (hi - lo) / 2
+            if self.line_starts.get(mid).unwrap() <= offset {
+                lo = mid
+            } else {
+                hi = mid
+            }
+        }
+        let line = lo + 1
+        let col = offset - self.line_starts.get(lo).unwrap() + 1
+        return (line as u32, col as u32)
+    }
+
+    fn line_text(self, line: u32) -> *const u8 {
+        if line == 0 || line > self.line_starts.len() {
+            return 0 as *const u8
+        }
+        let start = self.line_starts.get(line - 1).unwrap()
+        return self.content + start
+    }
+}
+
+struct SourceManager {
+    files: Vector<SourceFile>,
+}
+
+impl SourceManager {
+    fn new() -> SourceManager {
+        return SourceManager {
+            files: Vector::new(),
+        }
+    }
+
+    fn load(self, name: u64, content: *const u8, length: u64) -> u32 {
+        let id = self.files.len() as u32
+        self.files.push(SourceFile::new(id, name, content, length))
+        return id
+    }
+
+    fn file(self, id: u32) -> SourceFile {
+        return self.files.get(id)
+    }
+}

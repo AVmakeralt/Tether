@@ -1,0 +1,79 @@
+// compiler/ir/module.tether — IR module
+//
+// This is the toolkit's IR module type, separate from the reference
+// compiler's internal SSA. A compiler that uses this toolkit builds
+// its IR using these types.
+
+module compiler::ir::module
+
+import std::collections::densemap
+import std::memory::interner
+
+struct Module {
+    name: u64,  // StrId
+    functions: Vector<Function>,
+    globals: Vector<Global>,
+    externs: Vector<Extern>,
+    interner: interner::InternTable,
+}
+
+struct Function {
+    name: u64,
+    blocks: Vector<Block>,
+    entry: u64,
+    params: Vector<u64>,
+}
+
+struct Block {
+    id: u64,
+    instructions: Vector<Instruction>,
+    preds: Vector<u64>,
+    succs: Vector<u64>,
+}
+
+struct Instruction {
+    opcode: u64,
+    result: u64,
+    operands: Vector<u64>,
+    loc: Location,
+}
+
+struct Global {
+    name: u64,
+    ty: u64,
+    init: u64,
+}
+
+struct Extern {
+    name: u64,
+    param_types: Vector<u64>,
+    return_type: u64,
+}
+
+struct Location {
+    file: u32,
+    offset: u32,
+}
+
+impl Module {
+    fn new(intern: interner::InternTable) -> Module {
+        return Module {
+            name: 0,
+            functions: Vector::new(),
+            globals: Vector::new(),
+            externs: Vector::new(),
+            interner: intern,
+        }
+    }
+
+    fn add_function(self, name: u64) -> u64 {
+        let id = self.functions.len()
+        self.functions.push(Function {
+            name: name,
+            blocks: Vector::new(),
+            entry: 0,
+            params: Vector::new(),
+        })
+        return id
+    }
+}

@@ -1,0 +1,50 @@
+// std/core/ptr.tether — raw pointer operations
+//
+// All operations in this module are unsafe. They exist for FFI and
+// for implementing abstractions on top of raw memory.
+
+module std::core::ptr
+
+// A null pointer.
+fn null<T>() -> *mut T {
+    unsafe {
+        return 0 as *mut T
+    }
+}
+
+// Check if a pointer is null.
+fn is_null<T>(p: *const T) -> bool {
+    unsafe {
+        return p == null()
+    }
+}
+
+// Read a value from a pointer without moving it.
+fn read<T>(p: *const T) -> T {
+    unsafe {
+        return *p
+    }
+}
+
+// Write a value to a pointer without reading the old value.
+fn write<T>(p: *mut T, val: T) {
+    unsafe {
+        *p = val
+    }
+}
+
+// Offset a pointer by `count` elements.
+fn offset<T>(p: *const T, count: i64) -> *const T {
+    unsafe {
+        let bytes = count * sizeof<T>()
+        return p as *const u8 + bytes as *const T
+    }
+}
+
+// Add to a mutable pointer.
+fn add<T>(p: *mut T, count: i64) -> *mut T {
+    unsafe {
+        let bytes = count * sizeof<T>()
+        return p as *mut u8 + bytes as *mut T
+    }
+}

@@ -1,0 +1,101 @@
+// std/collections/smallvec.tether — SmallVec<T, N>
+//
+// A vector that stores up to N elements inline. If it grows beyond N,
+// it spills to the heap. This avoids heap allocation for the common
+// case of small collections — critical for compiler code where most
+// AST nodes have 0-2 children.
+
+module std::collections::smallvec
+
+struct SmallVec<T, N> {
+    // Inline storage for N elements.
+    inline: [T; N],
+    inline_len: u64,
+    // Heap storage (used when inline_len > N).
+    heap_ptr: *mut T,
+    heap_len: u64,
+    heap_cap: u64,
+}
+
+impl<T, N> SmallVec<T, N> {
+    fn new() -> SmallVec<T, N> {
+        return SmallVec {
+            inline: [],
+            inline_len: 0,
+            heap_ptr: 0 as *mut T,
+            heap_len: 0,
+            heap_cap: 0,
+        }
+    }
+
+    fn len(self) -> u64 {
+        return self.inline_len + self.heap_len
+    }
+
+    fn is_empty(self) -> bool {
+        return self.len() == 0
+    }
+
+    fn is_inline(self) -> bool {
+        return self.heap_ptr == 0 as *mut T
+    }
+
+    fn push(self, val: T) {
+        if self.is_inline() && self.inline_len < N {
+            self.inline[self.inline_len] = val
+            self.inline_len = self.inline_len + 1
+        } else {
+            self.push_heap(val)
+        }
+    }
+
+    fn push_heap(self, val: T) {
+        if self.heap_len >= self.heap_cap {
+            self.grow_heap()
+        }
+        unsafe {
+            *(self.heap_ptr + self.heap_len) = val
+        }
+        self.heap_len = self.heap_len + 1
+    }
+
+    fn grow_heap(self) {
+        let new_cap = if self.heap_cap == 0 { 4 } else { self.heap_cap * 2 }
+        unsafe {
+            self.heap_ptr = realloc(self.heap_ptr as *mut u8, new_cap * sizeof<T>()) as *mut T
+            self.heap_cap = new_cap
+        }
+    }
+
+    fn pop(self) -> Option<T> {
+        if self.heap_len > 0 {
+            self.heap_len = self.heap_len - 1
+            unsafe {
+                return Some(*(self.heap_ptr + self.heap_len))
+            }
+        }
+        if self.inline_len > 0 {
+            self.inline_len = self.inline_len - 1
+            return Some(self.inline[self.inline_len])
+        }
+        return None
+    }
+
+    fn clear(self) {
+        self.inline_len = 0
+        self.heap_len = 0
+    }
+
+    fn drop(self) {
+        unsafe {
+            if self.heap_cap > 0 {
+                free(self.heap_ptr as *mut u8)
+            }
+        }
+    }
+}
+
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)
+extern fn realloc(ptr: *mut u8, size: u64) -> *mut u8
+extern fn sizeof<T>() -> u64

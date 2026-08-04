@@ -1,0 +1,140 @@
+// compiler/cfg/cfg.tether — control flow graph
+
+module compiler::cfg::cfg
+
+import std::graph::graph
+import std::graph::algorithms
+
+// A CFG is a graph where nodes are basic blocks and edges are
+// control transfers. This module provides CFG-specific helpers on
+// top of the generic graph type.
+
+struct CFG {
+    graph: graph::Graph<BlockData, EdgeData>,
+    entry: u64,
+    exit: u64,
+}
+
+struct BlockData {
+    // The block's instructions (opaque — the IR layer fills these in).
+    instructions: u64,
+    is_terminator: bool,
+}
+
+struct EdgeData {
+    // The branch condition, if any. 0 = unconditional.
+    condition: u64,
+}
+
+impl CFG {
+    fn new() -> CFG {
+        let mut g = graph::Graph::new()
+        let entry = g.add_node(BlockData { instructions: 0, is_terminator: false })
+        let exit = g.add_node(BlockData { instructions: 0, is_terminator: false })
+        return CFG {
+            graph: g,
+            entry: entry,
+            exit: exit,
+        }
+    }
+
+    fn add_block(self) -> u64 {
+        return self.graph.add_node(BlockData {
+            instructions: 0,
+            is_terminator: false,
+        })
+    }
+
+    fn add_edge(self, from: u64, to: u64, condition: u64) {
+        self.graph.add_edge(from, to, EdgeData { condition: condition })
+    }
+
+    // Compute dominators using the iterative algorithm.
+    // Returns a vector where dominators[n] is the immediate dominator
+    // of block n.
+    fn dominators(self) -> Vector<u64> {
+        let num = self.graph.num_nodes()
+        let doms = unsafe { malloc(num * 8) as *mut u64 }
+
+        // Initialize: entry dominates itself; everything else is
+        // dominated by everything (will be narrowed).
+        unsafe {
+            let mut i: u64 = 0
+            while i < num {
+                if i == self.entry {
+                    *(doms + i) = self.entry
+                } else {
+                    *(doms + i) = 0xFFFFFFFFFFFFFFFF
+                }
+                i = i + 1
+            }
+        }
+
+        // Iterate to fixed point.
+        let changed = true
+        while changed {
+            let changed = false
+            // Process blocks in reverse postorder (skip entry).
+            let rpo = algorithms::reverse_postorder(self.graph, self.entry)
+            let mut i: u64 = 0
+            while i < rpo.len() {
+                let block = rpo.get(i).unwrap()
+                if block == self.entry {
+                    i = i + 1
+                    continue
+                }
+                // New idom = intersection of all predecessors' idoms.
+                let preds = self.graph.predecessors(block)
+                let mut new_idom: u64 = 0xFFFFFFFFFFFFFFFF
+                let mut j: u64 = 0
+                while j < preds.len() {
+                    let p = preds.get(j).unwrap()
+                    if *(doms + p) != 0xFFFFFFFFFFFFFFFF {
+                        if new_idom == 0xFFFFFFFFFFFFFFFF {
+                            new_idom = p
+                        } else {
+                            new_idom = self.intersect(doms, p, new_idom)
+                        }
+                    }
+                    j = j + 1
+                }
+                if *(doms + block) != new_idom {
+                    *(doms + block) = new_idom
+                    changed = true
+                }
+                i = i + 1
+            }
+        }
+
+        // Convert to a Vector.
+        let result = Vector::new()
+        unsafe {
+            let mut i: u64 = 0
+            while i < num {
+                result.push(*(doms + i))
+                i = i + 1
+            }
+            free(doms as *mut u8)
+        }
+        return result
+    }
+
+    fn intersect(self, doms: *mut u64, b1: u64, b2: u64) -> u64 {
+        unsafe {
+            let mut finger1 = b1
+            let mut finger2 = b2
+            while finger1 != finger2 {
+                while finger1 < finger2 {
+                    finger1 = *(doms + finger1)
+                }
+                while finger2 < finger1 {
+                    finger2 = *(doms + finger2)
+                }
+            }
+            return finger1
+        }
+    }
+}
+
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)

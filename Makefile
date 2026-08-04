@@ -7,7 +7,8 @@
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wpedantic \
-            -Wno-unused-parameter -Werror=return-type
+            -Wno-unused-parameter -Werror=return-type \
+            -DPROJECT_ROOT=\"$(CURDIR)\"
 INCLUDES := -Isrc -Itests
 
 # ---- Source files --------------------------------------------------------
@@ -85,7 +86,8 @@ TEST_SRC := \
     tests/test_ssa.cpp \
     tests/test_struct_enum.cpp \
     tests/test_v5.cpp \
-    tests/test_v6.cpp
+    tests/test_v6.cpp \
+    tests/test_stdlib.cpp
 
 bin/tether_tests: $(TEST_SRC) $(COMPILER_SRC) | bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(TEST_SRC) $(COMPILER_SRC) -o $@

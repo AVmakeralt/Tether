@@ -1,0 +1,135 @@
+// std/memory/arena.tether — Arena allocator
+//
+// Bump allocation: each allocation advances a pointer. The entire
+// arena is freed at once when the arena is dropped. No individual
+// frees. This is the core allocation pattern for compiler data
+// structures (ASTs, IR, etc.).
+
+module std::memory::arena
+
+struct Arena {
+    chunks: *mut Chunk,
+    num_chunks: u64,
+    cap_chunks: u64,
+    current_chunk: u64,
+}
+
+struct Chunk {
+    data: *mut u8,
+    size: u64,
+    used: u64,
+}
+
+const CHUNK_SIZE: u64 = 64 * 1024
+
+impl Arena {
+    fn new() -> Arena {
+        unsafe {
+            let chunks = malloc(16 * sizeof<Chunk>()) as *mut Chunk
+            let first_data = malloc(CHUNK_SIZE)
+            *chunks = Chunk {
+                data: first_data,
+                size: CHUNK_SIZE,
+                used: 0,
+            }
+            return Arena {
+                chunks: chunks,
+                num_chunks: 1,
+                cap_chunks: 16,
+                current_chunk: 0,
+            }
+        }
+    }
+
+    // Allocate `size` bytes with `align` alignment.
+    fn alloc(self, size: u64, align: u64) -> *mut u8 {
+        unsafe {
+            // Try the current chunk.
+            let chunk = self.chunks + self.current_chunk
+            let aligned = (chunk.used + align - 1) & ~(align - 1)
+            if aligned + size <= chunk.size {
+                let p = chunk.data + aligned
+                chunk.used = aligned + size
+                return p
+            }
+            // Need a new chunk.
+            self.grow(size + align)
+            let chunk = self.chunks + self.current_chunk
+            let aligned = (chunk.used + align - 1) & ~(align - 1)
+            let p = chunk.data + aligned
+            chunk.used = aligned + size
+            return p
+        }
+    }
+
+    // Allocate and construct a T.
+    fn construct<T>(self, val: T) -> *mut T {
+        unsafe {
+            let p = self.alloc(sizeof<T>(), 8) as *mut T
+            *p = val
+            return p
+        }
+    }
+
+    // Allocate a copy of a string.
+    fn dup_str(self, s: *const u8) -> *const u8 {
+        unsafe {
+            let mut len: u64 = 0
+            let mut p = s
+            while *p != 0 {
+                len = len + 1
+                p = p + 1
+            }
+            let dst = self.alloc(len + 1, 1)
+            let mut i: u64 = 0
+            while i < len {
+                *(dst + i) = *(s + i)
+                i = i + 1
+            }
+            *(dst + len) = 0
+            return dst as *const u8
+        }
+    }
+
+    fn grow(self, needed: u64) {
+        unsafe {
+            if self.num_chunks >= self.cap_chunks {
+                let new_cap = self.cap_chunks * 2
+                let new_chunks = malloc(new_cap * sizeof<Chunk>()) as *mut Chunk
+                let mut i: u64 = 0
+                while i < self.num_chunks {
+                    *(new_chunks + i) = *(self.chunks + i)
+                    i = i + 1
+                }
+                free(self.chunks as *mut u8)
+                self.chunks = new_chunks
+                self.cap_chunks = new_cap
+            }
+            let chunk_size = if CHUNK_SIZE > needed { CHUNK_SIZE } else { needed }
+            let data = malloc(chunk_size)
+            *(self.chunks + self.num_chunks) = Chunk {
+                data: data,
+                size: chunk_size,
+                used: 0,
+            }
+            self.current_chunk = self.num_chunks
+            self.num_chunks = self.num_chunks + 1
+        }
+    }
+
+    // Drop frees all chunks at once. No per-object destructors.
+    fn drop(self) {
+        unsafe {
+            let mut i: u64 = 0
+            while i < self.num_chunks {
+                free((*(self.chunks + i)).data)
+                i = i + 1
+            }
+            free(self.chunks as *mut u8)
+        }
+    }
+}
+
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)
+extern fn sizeof<T>() -> u64

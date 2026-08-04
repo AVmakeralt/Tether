@@ -1,0 +1,89 @@
+// std/collections/queue.tether — Queue<T>
+//
+// A FIFO queue backed by a ring buffer.
+
+module std::collections::queue
+
+struct Queue<T> {
+    buf: *mut T,
+    head: u64,
+    tail: u64,
+    count: u64,
+    cap: u64,
+}
+
+impl<T> Queue<T> {
+    fn new() -> Queue<T> {
+        return Queue::with_capacity(16)
+    }
+
+    fn with_capacity(cap: u64) -> Queue<T> {
+        unsafe {
+            return Queue {
+                buf: malloc(cap * sizeof<T>()) as *mut T,
+                head: 0,
+                tail: 0,
+                count: 0,
+                cap: cap,
+            }
+        }
+    }
+
+    fn len(self) -> u64 {
+        return self.count
+    }
+
+    fn is_empty(self) -> bool {
+        return self.count == 0
+    }
+
+    fn enqueue(self, val: T) {
+        if self.count >= self.cap {
+            self.grow()
+        }
+        unsafe {
+            *(self.buf + self.tail) = val
+            self.tail = (self.tail + 1) % self.cap
+            self.count = self.count + 1
+        }
+    }
+
+    fn dequeue(self) -> Option<T> {
+        if self.count == 0 {
+            return None
+        }
+        unsafe {
+            let val = *(self.buf + self.head)
+            self.head = (self.head + 1) % self.cap
+            self.count = self.count - 1
+            return Some(val)
+        }
+    }
+
+    fn grow(self) {
+        let new_cap = self.cap * 2
+        unsafe {
+            let new_buf = malloc(new_cap * sizeof<T>()) as *mut T
+            let mut i: u64 = 0
+            while i < self.count {
+                *(new_buf + i) = *(self.buf + ((self.head + i) % self.cap))
+                i = i + 1
+            }
+            free(self.buf as *mut u8)
+            self.buf = new_buf
+            self.head = 0
+            self.tail = self.count
+            self.cap = new_cap
+        }
+    }
+
+    fn drop(self) {
+        unsafe {
+            free(self.buf as *mut u8)
+        }
+    }
+}
+
+extern fn malloc(size: u64) -> *mut u8
+extern fn free(ptr: *mut u8)
+extern fn sizeof<T>() -> u64

@@ -1,0 +1,44 @@
+// std/core/mem.tether — memory primitives
+//
+// Low-level memory operations. Most of these are unsafe and exist for
+// FFI and implementing allocators. Safe code should never need them.
+
+module std::core::mem
+
+// Get the size of a type in bytes.
+extern fn sizeof<T>() -> u64
+
+// Get the alignment of a type in bytes.
+extern fn alignof<T>() -> u64
+
+// Copy `n` bytes from `src` to `dst`. The regions must not overlap.
+extern fn copy(dst: *mut u8, src: *const u8, n: u64)
+
+// Copy `n` bytes from `src` to `dst`. The regions may overlap.
+extern fn move(dst: *mut u8, src: *const u8, n: u64)
+
+// Fill `n` bytes at `dst` with byte `val`.
+extern fn fill(dst: *mut u8, val: u8, n: u64)
+
+// Zero `n` bytes at `dst`.
+fn zero(dst: *mut u8, n: u64) {
+    fill(dst, 0, n)
+}
+
+// Swap the values at two locations.
+fn swap<T>(a: *mut T, b: *mut T) {
+    unsafe {
+        let tmp = *a
+        *a = *b
+        *b = tmp
+    }
+}
+
+// Replace the value at `dst` with `val`, returning the old value.
+fn replace<T>(dst: *mut T, val: T) -> T {
+    unsafe {
+        let old = *dst
+        *dst = val
+        return old
+    }
+}

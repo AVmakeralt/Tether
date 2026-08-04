@@ -1,0 +1,97 @@
+// compiler/optimizer/passes.tether — optimization pass framework
+//
+// A simple framework for writing optimization passes. Each pass is a
+// function that transforms a module. Passes are run to a fixed point.
+
+module compiler::optimizer::passes
+
+import compiler::ir::module
+
+trait Pass {
+    fn name(self) -> u64
+    fn run(self, mod: module::Module) -> bool  // returns true if changed
+}
+
+struct PassManager {
+    passes: Vector<Pass>,
+    max_iterations: u64,
+}
+
+impl PassManager {
+    fn new() -> PassManager {
+        return PassManager {
+            passes: Vector::new(),
+            max_iterations: 100,
+        }
+    }
+
+    fn add_pass(self, pass: Pass) {
+        self.passes.push(pass)
+    }
+
+    fn run(self, mod: module::Module) -> u64 {
+        let mut total_changes: u64 = 0
+        let mut changed = true
+        let mut iter: u64 = 0
+        while changed && iter < self.max_iterations {
+            changed = false
+            let mut i: u64 = 0
+            while i < self.passes.len() {
+                let pass = self.passes.get(i).unwrap()
+                if pass.run(mod) {
+                    changed = true
+                    total_changes = total_changes + 1
+                }
+                i = i + 1
+            }
+            iter = iter + 1
+        }
+        return total_changes
+    }
+}
+
+// ---- Standard passes ----
+
+// Constant folding: fold ConstInt + ConstInt → ConstInt.
+struct ConstantFold {}
+
+impl Pass for ConstantFold {
+    fn name(self) -> u64 {
+        return 0  // StrId for "constant-fold"
+    }
+
+    fn run(self, mod: module::Module) -> bool {
+        let mut changed = false
+        let mut i: u64 = 0
+        while i < mod.functions.len() {
+            let fn_item = mod.functions.get(i).unwrap()
+            let mut j: u64 = 0
+            while j < fn_item.blocks.len() {
+                let block = fn_item.blocks.get(j).unwrap()
+                let mut k: u64 = 0
+                while k < block.instructions.len() {
+                    // Check if this instruction's operands are all
+                    // constants and fold if so.
+                    // v0.1: placeholder.
+                    k = k + 1
+                }
+                j = j + 1
+            }
+            i = i + 1
+        }
+        return changed
+    }
+}
+
+// Dead code elimination: remove instructions whose results are unused.
+struct DeadCodeElim {}
+
+impl Pass for DeadCodeElim {
+    fn name(self) -> u64 {
+        return 1  // StrId for "dce"
+    }
+
+    fn run(self, mod: module::Module) -> bool {
+        return false  // v0.1: placeholder
+    }
+}
