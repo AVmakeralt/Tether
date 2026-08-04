@@ -584,6 +584,9 @@ std::string Emitter::emit_expr(ExprPtr e) {
         case ExprKind::Comptime:
             // Lower like a block — the optimizer will fold constants.
             return emit_block(e->block);
+        case ExprKind::Reflect:
+            // Compile-time reflection — no runtime code.
+            return "";
         case ExprKind::Await:
             return emit_expr(e->lhs);
         case ExprKind::Tuple: {

@@ -509,6 +509,8 @@ type::TypePtr TypeChecker::check_expr(ExprPtr e, type::TypePtr expected) {
             }
             break;
         }
+        case ExprKind::Reflect:
+            return tc_.void_type();
         case ExprKind::Await:
             actual = check_expr(e->lhs);
             break;

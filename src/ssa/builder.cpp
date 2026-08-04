@@ -1030,6 +1030,9 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
             }
             return kInvalidValue;
         }
+        case ExprKind::Reflect:
+            // Compile-time reflection — no runtime code.
+            return kInvalidValue;
         case ExprKind::Await:
             return lower_expr(*e.lhs);
         case ExprKind::Tuple: {

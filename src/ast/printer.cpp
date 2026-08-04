@@ -75,6 +75,7 @@ const char* expr_kind_name(ExprKind k) {
         case ExprKind::Unsafe:      return "unsafe";
         case ExprKind::Spawn:       return "spawn";
         case ExprKind::Comptime:    return "comptime";
+        case ExprKind::Reflect:     return "reflect";
         case ExprKind::Await:       return "await";
         case ExprKind::Tuple:       return "tuple";
         case ExprKind::ArrayLit:    return "array-lit";
@@ -439,6 +440,9 @@ void Printer::print_expr(ExprPtr e) {
         case ExprKind::Comptime:
             out_ << " ";
             print_block(e->block);
+            break;
+        case ExprKind::Reflect:
+            out_ << "(type)";
             break;
         case ExprKind::Await:
             out_ << " ";

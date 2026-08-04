@@ -650,6 +650,8 @@ TypePtr Resolver::resolve_expr(ExprPtr e) {
                 return resolve_expr(e->block->trailing);
             }
             return tc_.void_type();
+        case ExprKind::Reflect:
+            return tc_.void_type();
         case ExprKind::Await:
             return resolve_expr(e->lhs);
         case ExprKind::Tuple: {

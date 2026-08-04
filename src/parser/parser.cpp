@@ -353,6 +353,11 @@ std::vector<ast::TypeParam> Parser::parse_type_params() {
     while (!check(TokenKind::Gt) && !check(TokenKind::Shr) && !check(TokenKind::Eof)) {
         ast::TypeParam tp;
         tp.range = current().range;
+        // Check for 'const' keyword — marks a const generic parameter.
+        if (check(TokenKind::KwConst)) {
+            consume();
+            tp.is_const = true;
+        }
         if (!check(TokenKind::Ident)) {
             diag_.error(current().range, "expected type parameter name");
             break;
@@ -581,6 +586,11 @@ ast::ItemPtr Parser::parse_enum_decl() {
                 if (!match(TokenKind::Comma)) break;
             }
             expect(TokenKind::RParen, "')' to close variant args");
+        }
+        // GADT: Variant(args) -> SpecificType
+        if (match(TokenKind::Arrow)) {
+            v.is_gadt = true;
+            v.gadts_return = parse_type();
         }
         item.variants.push_back(std::move(v));
         if (!match(TokenKind::Comma)) break;
@@ -1316,6 +1326,22 @@ ast::ExprPtr Parser::parse_postfix_expr() {
 }
 
 ast::ExprPtr Parser::parse_primary_expr() {
+    // Contextual keyword: reflect(Type) — compile-time type reflection.
+    if (check(TokenKind::Ident) &&
+        intern_.get(current().str_id) == "reflect") {
+        Token t = current();
+        consume();
+        if (match(TokenKind::LParen)) {
+            ast::Expr e;
+            e.kind  = ast::ExprKind::Reflect;
+            e.range = t.range;
+            ast::TypePtr ty = parse_type();
+            (void)ty;
+            expect(TokenKind::RParen, "')' to close reflect");
+            return make(std::move(e));
+        }
+    }
+
     switch (current().kind) {
         case TokenKind::IntLit: {
             ast::Expr e;

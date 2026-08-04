@@ -199,6 +199,7 @@ enum class ExprKind : uint8_t {
 
     // Compile-time
     Comptime,   // comptime { ... } — evaluated at compile time
+    Reflect,    // reflect(T) — compile-time type reflection
 
     // Misc
     Tuple,
@@ -383,6 +384,11 @@ struct Field {
 struct Variant {
     StrId    name = kInvalidStrId;
     std::vector<TypePtr> args;
+    // GADT: optional return type refinement. If present, this variant
+    // only exists at this specific type instantiation.
+    // e.g. enum Expr<T> { Int(i64) -> Expr<i64>, Bool(bool) -> Expr<bool> }
+    TypePtr  gadts_return = nullptr;
+    bool     is_gadt = false;
     SourceRange range;
 };
 
@@ -399,6 +405,7 @@ struct Param {
 struct TypeParam {
     StrId    name = kInvalidStrId;
     std::vector<std::vector<StrId>> bounds; // each bound is a path
+    bool     is_const = false;  // const N — compile-time integer parameter
     SourceRange range;
 };
 
