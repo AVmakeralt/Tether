@@ -13,54 +13,6 @@ This repository is the reference compiler, `tetherc`, written in C++17.
 
 ---
 
-## Status
-
-**v0.3 — Full SSA pipeline with own IR + LLVM lowering.**
-
-The compiler lexes, parses, resolves names, type-checks, borrow-checks,
-lowers to Tether's own SSA IR, optimizes the SSA, and lowers to LLVM IR
-text (`.ll`).
-
-```
-source → lexer → parser → AST → resolver → type checker →
-         borrow checker → SSA builder → SSA optimizer → LLVM IR
-```
-
-| Stage          | Status         |
-|----------------|----------------|
-| Lexer          | implemented    |
-| Parser         | implemented    |
-| AST            | implemented    |
-| Name resolution| implemented    |
-| Type checker   | implemented    |
-| Borrow checker | implemented    |
-| SSA builder    | implemented    |
-| SSA optimizer  | implemented    |
-| SSA → LLVM IR  | implemented    |
-| Partial eval   | implemented    |
-| Incremental    | implemented    |
-
-### Why not AST → LLVM IR directly?
-
-LLVM cannot:
-- verify ownership / borrows (no concept of move)
-- track allocation domains (no concept of arena)
-- enforce region / lifetime invariants (no concept of region)
-- monomorphize generics (no concept of trait bounds)
-- resolve trait dispatch (no concept of Tether traits)
-- run user-defined `rewrite` rules
-- do partial evaluation of arbitrary comptime functions
-- compile pattern matches with structural patterns + guards
-- elide bounds checks via range analysis on Tether semantics
-- enforce the "no hidden allocations" invariant
-- track unsafe boundaries
-- do per-function incremental compilation
-
-All of that happens on Tether's SSA module. LLVM only sees the final,
-optimized SSA lowered to its own IR.
-
----
-
 ## Design Principles
 
 1. **Memory safe by default** — no UB, no raw pointers, no null, no
