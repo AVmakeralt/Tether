@@ -1480,6 +1480,58 @@ ast::ExprPtr Parser::parse_primary_expr() {
                 path.push_back(current().str_id);
                 consume();
             }
+
+            // Struct literal: Foo { x: 1, y: 2 } or Foo { x, y }
+            // Only if: '{' is next AND the token after '{' is an
+            // identifier followed by ':' or ',' or '}'. This avoids
+            // ambiguity with if/while/for/match bodies where '{'
+            // starts a block.
+            if (check(TokenKind::LBrace)) {
+                bool is_struct_lit = false;
+                if (peek(1).kind == TokenKind::RBrace) {
+                    // Foo { } — empty struct literal
+                    is_struct_lit = true;
+                } else if (peek(1).kind == TokenKind::Ident) {
+                    if (peek(2).kind == TokenKind::Colon ||
+                        peek(2).kind == TokenKind::Comma ||
+                        peek(2).kind == TokenKind::RBrace) {
+                        is_struct_lit = true;
+                    }
+                }
+                if (is_struct_lit) {
+                    consume(); // '{'
+                    e.kind = ast::ExprKind::StructLit;
+                    while (!check(TokenKind::RBrace) && !check(TokenKind::Eof)) {
+                        if (!check(TokenKind::Ident)) {
+                            diag_.error(current().range, "expected field name in struct literal");
+                            break;
+                        }
+                        StrId field_name = current().str_id;
+                        consume();
+                        if (match(TokenKind::Colon)) {
+                            ast::ExprPtr val = parse_expr();
+                            ast::Expr name_expr;
+                            name_expr.kind = ast::ExprKind::Ident;
+                            name_expr.range = e.range;
+                            name_expr.path = {field_name};
+                            e.args.push_back(make(std::move(name_expr)));
+                            e.args.push_back(val);
+                        } else {
+                            ast::Expr name_expr;
+                            name_expr.kind = ast::ExprKind::Ident;
+                            name_expr.range = e.range;
+                            name_expr.path = {field_name};
+                            e.args.push_back(make(std::move(name_expr)));
+                            e.args.push_back(make(std::move(name_expr)));
+                        }
+                        if (!match(TokenKind::Comma)) break;
+                    }
+                    expect(TokenKind::RBrace, "'}' to close struct literal");
+                    e.path = std::move(path);
+                    return make(std::move(e));
+                }
+            }
+
             if (path.size() == 1) {
                 e.kind = ast::ExprKind::Ident;
             } else {
@@ -1554,7 +1606,12 @@ ast::ExprPtr Parser::parse_match_expr() {
             arm.guard = parse_expr();
         }
         expect(TokenKind::FatArrow, "'=>' in match arm");
-        arm.body = parse_expr();
+        // Body can be an expression or a block.
+        if (check(TokenKind::LBrace)) {
+            arm.body = parse_block_as_expr_or_block();
+        } else {
+            arm.body = parse_expr();
+        }
         e.arms.push_back(std::move(arm));
         if (!match(TokenKind::Comma)) {
             // Allow trailing without comma if next is '}'.

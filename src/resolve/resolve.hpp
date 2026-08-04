@@ -54,6 +54,7 @@ struct Decl {
         Self,       // the implicit 'self' parameter
         Variant,    // enum variant
         Field,      // struct/union field
+        Module,     // imported module (placeholder for cross-module refs)
     };
 
     Kind        kind;

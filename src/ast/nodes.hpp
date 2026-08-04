@@ -204,6 +204,7 @@ enum class ExprKind : uint8_t {
     // Misc
     Tuple,
     ArrayLit,
+    StructLit,   // Foo { x: 1, y: 2 } — struct literal
 };
 
 enum class UnaryOp : uint8_t {

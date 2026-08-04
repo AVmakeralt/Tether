@@ -113,6 +113,25 @@ bool Resolver::resolve_module(const ast::Module& m) {
     }
 
     // Second pass: resolve bodies / signatures.
+    // Process imports: register the last component of each import path
+    // as a name in the current scope. This allows `import foo::bar`
+    // to be used as `bar::function()`.
+    for (ItemPtr item : m.items) {
+        if (!item || item->kind != ItemKind::Import) continue;
+        if (item->path.empty()) continue;
+        StrId last = item->path.back();
+        // Register a placeholder decl for the imported module.
+        // The actual resolution happens when we see `last::name` —
+        // we treat it as a path expression.
+        if (top_level_.find(last) == top_level_.end()) {
+            Decl d;
+            d.kind  = Decl::Kind::Module;
+            d.name  = last;
+            d.range = item->range;
+            register_decl(std::move(d));
+        }
+    }
+
     for (ItemPtr item : m.items) {
         if (!item) continue;
         resolve_item(item);

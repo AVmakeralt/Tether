@@ -79,6 +79,7 @@ const char* expr_kind_name(ExprKind k) {
         case ExprKind::Await:       return "await";
         case ExprKind::Tuple:       return "tuple";
         case ExprKind::ArrayLit:    return "array-lit";
+        case ExprKind::StructLit:   return "struct-lit";
     }
     return "?";
 }
@@ -468,6 +469,19 @@ void Printer::print_expr(ExprPtr e) {
             } else {
                 out_ << ")";
             }
+            break;
+        case ExprKind::StructLit:
+            out_ << " " << intern_.get(e->path.back());
+            out_ << " :fields (";
+            for (size_t i = 0; i + 1 < e->args.size(); i += 2) {
+                if (i > 0) out_ << " ";
+                out_ << "(";
+                print_expr(e->args[i]);
+                out_ << " ";
+                print_expr(e->args[i + 1]);
+                out_ << ")";
+            }
+            out_ << ")";
             break;
     }
     out_ << ")";
