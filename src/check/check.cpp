@@ -59,6 +59,7 @@ void TypeChecker::check_item(ItemPtr item) {
         case ItemKind::Module:
         case ItemKind::Import:
         case ItemKind::Rewrite:
+        case ItemKind::Macro:
             break;
         case ItemKind::Export:
             check_item(item->inner);
@@ -555,6 +556,14 @@ void TypeChecker::check_pattern(PatternPtr p, type::TypePtr expected) {
             break;
         case PatternKind::As:
             check_pattern(p->inner, expected);
+            break;
+        case PatternKind::Or:
+            for (PatternPtr alt : p->alternatives) {
+                check_pattern(alt, expected);
+            }
+            break;
+        case PatternKind::Range:
+            // Range patterns match integers — no sub-patterns to check.
             break;
         default:
             break;

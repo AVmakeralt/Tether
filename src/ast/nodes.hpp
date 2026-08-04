@@ -105,6 +105,8 @@ enum class PatternKind : uint8_t {
     Tuple,        // (a, b, c)
     Struct,       // { x: a, y: b, .. }
     As,           // pat as x
+    Or,           // A | B  (or-pattern)
+    Range,        // 1..=10  (range pattern)
 };
 
 class Pattern {
@@ -140,6 +142,13 @@ public:
 
     // As.
     PatternPtr inner = nullptr;
+
+    // Or: list of alternatives (at least 2).
+    std::vector<PatternPtr> alternatives;
+
+    // Range: lo..=hi (inclusive). Uses int_value for lo, int_value_hi for hi.
+    uint64_t int_value_hi = 0;
+    bool range_inclusive = true;  // ..= vs ..
 };
 
 // ---- Expression AST ----------------------------------------------------
@@ -220,6 +229,7 @@ enum class AssignOp : uint8_t {
 
 struct MatchArm {
     PatternPtr pattern = nullptr;
+    ExprPtr    guard   = nullptr;    // optional: `if guard`
     ExprPtr    body    = nullptr;
     SourceRange range;
 };
@@ -327,6 +337,25 @@ public:
 
 // ---- Items -------------------------------------------------------------
 
+// Calling conventions for FFI.
+enum class CallConv : uint8_t {
+    C,          // extern "C" — the default
+    Fastcall,   // extern "fastcall"
+    Stdcall,    // extern "stdcall"
+    Tether,     // Tether's native calling convention (default for non-extern)
+    // v0.7 additions
+    Vectorcall, // extern "vectorcall"
+    SysV,       // extern "sysv" (System V AMD64)
+    Win64,      // extern "win64"
+};
+
+// Effects: mark functions as pure or IO.
+enum class Effect : uint8_t {
+    Pure,       // no side effects, no IO — safe to reorder, CSE, etc.
+    IO,         // may perform IO — not reorderable
+    Unsafe,     // may perform unsafe operations
+};
+
 enum class ItemKind : uint8_t {
     Module,        // module foo::bar
     Import,        // import foo::bar
@@ -342,6 +371,7 @@ enum class ItemKind : uint8_t {
     Static,
     Extern,
     Rewrite,       // rewrite Name { pattern => replacement, ... }
+    Macro,         // macro Name { ... } — hygienic macro definition
 };
 
 struct Field {
@@ -422,6 +452,33 @@ public:
 
     // Rewrite: list of (pattern, replacement) arms.
     std::vector<RewriteArm> rewrite_arms;
+
+    // ---- v0.7 additions ----
+
+    // Calling convention (for extern fns).
+    CallConv call_conv = CallConv::Tether;
+
+    // Effect (pure / io / unsafe).
+    Effect effect = Effect::IO;
+
+    // Where clauses: additional trait bounds on generic functions.
+    // Each entry is a (type, trait) pair meaning "where T: Trait".
+    struct WhereClause {
+        TypePtr                type_bound;
+        std::vector<std::vector<StrId>> trait_bounds;  // paths
+    };
+    std::vector<WhereClause> where_clauses;
+
+    // Attributes: @inline, @noalias, @cold, etc.
+    struct Attribute {
+        StrId                    name = kInvalidStrId;
+        std::vector<ExprPtr>     args;
+        SourceRange              range;
+    };
+    std::vector<Attribute> attributes;
+
+    // Macro: list of macro rules (pattern => expansion).
+    std::vector<RewriteArm> macro_rules;
 };
 
 class Module {

@@ -246,7 +246,10 @@ void Resolver::resolve_item(ItemPtr item) {
             break;
         case ItemKind::Module:
         case ItemKind::Import:
-            // Handled at module load time.
+        case ItemKind::Rewrite:
+        case ItemKind::Macro:
+            // Rewrites and macros are handled by the rewriter pass,
+            // not by name resolution.
             break;
     }
 }
@@ -707,7 +710,7 @@ void Resolver::resolve_pattern(PatternPtr p, TypePtr expected) {
                 if (f.sub) resolve_pattern(f.sub);
             }
             break;
-        case PatternKind::As:
+        case PatternKind::As: {
             resolve_pattern(p->inner);
             // Register the binding.
             Decl d;
@@ -718,6 +721,15 @@ void Resolver::resolve_pattern(PatternPtr p, TypePtr expected) {
             d.slot  = next_slot_++;
             Decl* ptr = arena_.construct<Decl>(std::move(d));
             scopes_.back().names[p->name] = ptr;
+            break;
+        }
+        case PatternKind::Or:
+            for (PatternPtr alt : p->alternatives) {
+                resolve_pattern(alt);
+            }
+            break;
+        case PatternKind::Range:
+            // No bindings to register.
             break;
     }
 }

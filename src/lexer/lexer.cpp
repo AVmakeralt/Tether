@@ -365,9 +365,10 @@ Token Lexer::lex_operator() {
         case '~': return make(TokenKind::BitNot,    start, pos_);
         case '.':
             if (match('.')) {
-                // We don't have a range token in v0.1; emit two dots.
-                --pos_;
-                return make(TokenKind::Dot, start, start + 1);
+                if (match('=')) {
+                    return make(TokenKind::DotDotEq, start, pos_);
+                }
+                return make(TokenKind::DotDot, start, pos_);
             }
             return make(TokenKind::Dot, start, pos_);
         case ':':
@@ -409,7 +410,7 @@ Token Lexer::lex_operator() {
             return make(TokenKind::BitAnd, start, pos_);
         case '|':
             if (match('|')) return make(TokenKind::Or, start, pos_);
-            return make(TokenKind::BitOr, start, pos_);
+            return make(TokenKind::Pipe, start, pos_);
         case '^':
             return make(TokenKind::BitXor, start, pos_);
         default:

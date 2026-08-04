@@ -54,6 +54,7 @@ void walk(const Pattern& p, Visitor& v) {
     v.visit_pattern(p);
     if (p.inner) walk(*p.inner, v);
     for (PatternPtr s : p.subpatterns) if (s) walk(*s, v);
+    for (PatternPtr s : p.alternatives) if (s) walk(*s, v);
     for (const auto& f : p.fields) if (f.sub) walk(*f.sub, v);
 }
 
@@ -73,6 +74,7 @@ void walk(const Expr& e, Visitor& v) {
     if (e.alloc_value)  walk(*e.alloc_value,  v);
     for (const auto& arm : e.arms) {
         if (arm.pattern) walk(*arm.pattern, v);
+        if (arm.guard)   walk(*arm.guard,   v);
         if (arm.body)    walk(*arm.body,    v);
     }
     if (e.element_type) walk(*e.element_type, v);

@@ -119,6 +119,37 @@ ast::ModulePtr Parser::parse_module() {
 // ============================================================================
 
 ast::ItemPtr Parser::parse_item() {
+    // Parse attributes: @inline, @noalias, @cold, etc.
+    std::vector<ast::Item::Attribute> attrs;
+    while (check(TokenKind::At)) {
+        ast::Item::Attribute attr;
+        attr.range = current().range;
+        consume(); // '@'
+        if (!check(TokenKind::Ident)) {
+            diag_.error(current().range, "expected attribute name after '@'");
+            break;
+        }
+        attr.name = current().str_id;
+        consume();
+        // Optional arguments: @inline(always) or @inline(always, cold)
+        if (match(TokenKind::LParen)) {
+            while (!check(TokenKind::RParen) && !check(TokenKind::Eof)) {
+                attr.args.push_back(parse_expr());
+                if (!match(TokenKind::Comma)) break;
+            }
+            expect(TokenKind::RParen, "')' to close attribute args");
+        }
+        attrs.push_back(std::move(attr));
+    }
+
+    ast::ItemPtr item = parse_item_inner();
+    if (item && !attrs.empty()) {
+        const_cast<ast::Item*>(item)->attributes = std::move(attrs);
+    }
+    return item;
+}
+
+ast::ItemPtr Parser::parse_item_inner() {
     switch (current().kind) {
         case TokenKind::KwModule: return parse_module_decl();
         case TokenKind::KwImport: return parse_import_decl();
@@ -176,6 +207,53 @@ ast::ItemPtr Parser::parse_item() {
                 }
                 expect(TokenKind::RBrace, "'}' to close rewrite body");
                 return make(std::move(item));
+            }
+            // Check for contextual 'macro' keyword.
+            if (check(TokenKind::Ident) &&
+                intern_.get(current().str_id) == "macro") {
+                consume();
+                ast::Item item;
+                item.kind  = ast::ItemKind::Macro;
+                item.range = current().range;
+                if (!check(TokenKind::Ident)) {
+                    diag_.error(current().range, "expected macro name");
+                    return nullptr;
+                }
+                item.name = current().str_id;
+                consume();
+                expect(TokenKind::LBrace, "'{' to open macro body");
+                while (!check(TokenKind::RBrace) && !check(TokenKind::Eof)) {
+                    ast::RewriteArm arm;
+                    arm.range = current().range;
+                    arm.pattern = parse_expr();
+                    expect(TokenKind::FatArrow, "'=>' in macro rule");
+                    arm.replacement = parse_expr();
+                    item.macro_rules.push_back(std::move(arm));
+                    if (!match(TokenKind::Comma)) break;
+                }
+                expect(TokenKind::RBrace, "'}' to close macro body");
+                return make(std::move(item));
+            }
+            // Check for contextual 'effect' keyword.
+            if (check(TokenKind::Ident) &&
+                intern_.get(current().str_id) == "pure") {
+                // pure fn ... — mark as pure effect
+                consume();
+                ast::ItemPtr fn = parse_fn_decl(false);
+                if (fn) {
+                    const_cast<ast::Item*>(fn)->effect = ast::Effect::Pure;
+                }
+                return fn;
+            }
+            if (check(TokenKind::Ident) &&
+                intern_.get(current().str_id) == "io") {
+                // io fn ... — mark as IO effect
+                consume();
+                ast::ItemPtr fn = parse_fn_decl(false);
+                if (fn) {
+                    const_cast<ast::Item*>(fn)->effect = ast::Effect::IO;
+                }
+                return fn;
             }
             std::string msg = "expected item, got '";
             if (const char* s = token_kind_spelling(current().kind)) msg += s;
@@ -359,6 +437,16 @@ std::vector<ast::Param> Parser::parse_params(bool allow_self) {
 
         if (!check(TokenKind::Ident)) {
             // '...' for variadic extern params.
+            // Now lexes as DotDot followed by Dot, or three Dots.
+            if (check(TokenKind::DotDot)) {
+                consume();
+                if (match(TokenKind::Dot)) {
+                    p.is_variadic = true;
+                    out.push_back(std::move(p));
+                    if (!match(TokenKind::Comma)) break;
+                    continue;
+                }
+            }
             if (check(TokenKind::Dot)) {
                 consume();
                 if (match(TokenKind::Dot) && match(TokenKind::Dot)) {
@@ -401,6 +489,24 @@ ast::ItemPtr Parser::parse_fn_decl(bool is_extern) {
 
     if (match(TokenKind::Arrow)) {
         item.return_type = parse_type();
+    }
+
+    // Optional where clause: where T: Trait, U: Trait2
+    if (check(TokenKind::Ident) && intern_.get(current().str_id) == "where") {
+        consume();
+        while (!check(TokenKind::LBrace) && !check(TokenKind::Semicolon) &&
+               !check(TokenKind::Eof)) {
+            ast::Item::WhereClause wc;
+            wc.type_bound = parse_type();
+            if (match(TokenKind::Colon)) {
+                do {
+                    std::vector<StrId> bound = parse_path();
+                    wc.trait_bounds.push_back(std::move(bound));
+                } while (match(TokenKind::Plus));
+            }
+            item.where_clauses.push_back(std::move(wc));
+            if (!match(TokenKind::Comma)) break;
+        }
     }
 
     if (is_extern) {
@@ -623,10 +729,37 @@ ast::ItemPtr Parser::parse_extern_decl() {
     item.kind  = ast::ItemKind::Extern;
     item.range = current().range;
     consume(); // 'extern'
+
+    // Optional calling convention: extern "C", extern "fastcall", etc.
+    if (check(TokenKind::StringLit)) {
+        std::string_view conv = intern_.get(current().str_id);
+        if (conv == "C") {
+            item.call_conv = ast::CallConv::C;
+        } else if (conv == "fastcall") {
+            item.call_conv = ast::CallConv::Fastcall;
+        } else if (conv == "stdcall") {
+            item.call_conv = ast::CallConv::Stdcall;
+        } else if (conv == "vectorcall") {
+            item.call_conv = ast::CallConv::Vectorcall;
+        } else if (conv == "sysv") {
+            item.call_conv = ast::CallConv::SysV;
+        } else if (conv == "win64") {
+            item.call_conv = ast::CallConv::Win64;
+        } else {
+            diag_.error(current().range,
+                std::string("unknown calling convention '") +
+                std::string(conv) + "'");
+        }
+        consume();
+    }
+
     if (check(TokenKind::KwFn)) {
         item.extern_decl = parse_fn_decl(/*is_extern=*/true);
+        // Propagate calling convention to the inner fn.
+        if (item.extern_decl) {
+            const_cast<ast::Item*>(item.extern_decl)->call_conv = item.call_conv;
+        }
     } else if (check(TokenKind::KwStruct)) {
-        // extern class — parse like a struct for v0.1.
         item.extern_decl = parse_struct_decl();
     } else {
         diag_.error(current().range, "expected 'fn' after 'extern'");
@@ -1389,6 +1522,11 @@ ast::ExprPtr Parser::parse_match_expr() {
         ast::MatchArm arm;
         arm.range = current().range;
         arm.pattern = parse_pattern();
+        // Optional guard: `if guard_expr`
+        if (check(TokenKind::KwIf)) {
+            consume();
+            arm.guard = parse_expr();
+        }
         expect(TokenKind::FatArrow, "'=>' in match arm");
         arm.body = parse_expr();
         e.arms.push_back(std::move(arm));
@@ -1571,9 +1709,8 @@ ast::PatternPtr Parser::parse_pattern() {
                     p.fields.push_back(std::move(f));
                     if (!match(TokenKind::Comma)) break;
                 }
-                if (check(TokenKind::Dot)) {
+                if (check(TokenKind::DotDot)) {
                     consume();
-                    expect(TokenKind::Dot, "'..'");
                     p.has_rest = true;
                 }
                 expect(TokenKind::RBrace, "'}' to close struct pattern");
@@ -1594,6 +1731,28 @@ ast::PatternPtr Parser::parse_pattern() {
             p.kind      = ast::PatternKind::Int;
             p.int_value = current().int_val;
             consume();
+            // Check for range pattern: 1..=10 or 1..10
+            if (check(TokenKind::DotDotEq)) {
+                consume();
+                if (!check(TokenKind::IntLit)) {
+                    diag_.error(current().range, "expected integer after '..=' in range pattern");
+                    break;
+                }
+                p.kind = ast::PatternKind::Range;
+                p.int_value_hi = current().int_val;
+                p.range_inclusive = true;
+                consume();
+            } else if (check(TokenKind::DotDot)) {
+                consume();
+                if (!check(TokenKind::IntLit)) {
+                    diag_.error(current().range, "expected integer after '..' in range pattern");
+                    break;
+                }
+                p.kind = ast::PatternKind::Range;
+                p.int_value_hi = current().int_val;
+                p.range_inclusive = false;
+                consume();
+            }
             break;
         }
         case TokenKind::Minus: {
@@ -1642,7 +1801,22 @@ ast::PatternPtr Parser::parse_pattern() {
         }
     }
 
-    // 'as' binding: pat as name. 'as' is not a keyword in v0.1; accept
+    // Or-pattern: pat | pat | pat
+    if (check(TokenKind::Pipe)) {
+        std::vector<ast::PatternPtr> alts;
+        alts.push_back(make(std::move(p)));
+        while (check(TokenKind::Pipe)) {
+            consume();
+            alts.push_back(parse_pattern());
+        }
+        ast::Pattern or_pat;
+        or_pat.kind = ast::PatternKind::Or;
+        or_pat.range = alts[0]->range;
+        or_pat.alternatives = std::move(alts);
+        p = std::move(or_pat);
+    }
+
+    // 'as' binding: pat as name. 'as' is not a keyword; accept
     // any ident 'as'.
     if (check(TokenKind::Ident) && intern_.get(current().str_id) == "as") {
         consume();

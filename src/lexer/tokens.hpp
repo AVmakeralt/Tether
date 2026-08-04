@@ -88,6 +88,9 @@ enum class TokenKind : uint16_t {
     Colon,      // :
     DoubleColon,// ::
     Dot,        // .
+    DotDot,     // ..
+    DotDotEq,   // ..=
+    Pipe,       // |
     Arrow,      // ->
     FatArrow,   // =>
     At,         // @

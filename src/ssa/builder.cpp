@@ -117,6 +117,8 @@ void Builder::lower_item(const ast::Item& item) {
         case ItemKind::Static:
         case ItemKind::Module:
         case ItemKind::Import:
+        case ItemKind::Rewrite:
+        case ItemKind::Macro:
         case ItemKind::Export:
             if (item.inner) lower_item(*item.inner);
             break;

@@ -64,6 +64,7 @@ private:
 
     // ---- Module-level parsing ----
     ast::ItemPtr parse_item();
+    ast::ItemPtr parse_item_inner();
     ast::ItemPtr parse_module_decl();
     ast::ItemPtr parse_import_decl();
     ast::ItemPtr parse_export_decl();

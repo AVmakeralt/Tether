@@ -100,6 +100,8 @@ void Emitter::emit_item(const ast::Item& item) {
             break;
         case ItemKind::Module:
         case ItemKind::Import:
+        case ItemKind::Rewrite:
+        case ItemKind::Macro:
         case ItemKind::Export:
             if (item.inner) emit_item(*item.inner);
             break;
@@ -579,6 +581,9 @@ std::string Emitter::emit_expr(ExprPtr e) {
         case ExprKind::Spawn:
             (void)emit_expr(e->body);
             return "";
+        case ExprKind::Comptime:
+            // Lower like a block — the optimizer will fold constants.
+            return emit_block(e->block);
         case ExprKind::Await:
             return emit_expr(e->lhs);
         case ExprKind::Tuple: {

@@ -86,7 +86,8 @@ TEST_SRC := \
     tests/test_ssa.cpp \
     tests/test_struct_enum.cpp \
     tests/test_v5.cpp \
-    tests/test_v6.cpp
+    tests/test_v6.cpp \
+    tests/test_v7.cpp
 
 bin/tether_tests: $(TEST_SRC) $(COMPILER_SRC) | bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(TEST_SRC) $(COMPILER_SRC) -o $@

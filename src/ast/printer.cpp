@@ -36,6 +36,8 @@ const char* pattern_kind_name(PatternKind k) {
         case PatternKind::Tuple:    return "tuple";
         case PatternKind::Struct:   return "struct";
         case PatternKind::As:       return "as";
+        case PatternKind::Or:       return "or";
+        case PatternKind::Range:    return "range";
     }
     return "?";
 }
@@ -109,6 +111,8 @@ const char* item_kind_name(ItemKind k) {
         case ItemKind::Const:     return "const";
         case ItemKind::Static:    return "static";
         case ItemKind::Extern:    return "extern";
+        case ItemKind::Rewrite:   return "rewrite";
+        case ItemKind::Macro:     return "macro";
     }
     return "?";
 }
@@ -200,6 +204,19 @@ void Printer::print_pattern(PatternPtr p) {
     }
     if (p->has_rest) out_ << " :rest";
     if (p->inner) { out_ << " :inner "; print_pattern(p->inner); }
+    if (p->kind == PatternKind::Or && !p->alternatives.empty()) {
+        out_ << " :alts (";
+        for (size_t i = 0; i < p->alternatives.size(); ++i) {
+            if (i) out_ << " | ";
+            print_pattern(p->alternatives[i]);
+        }
+        out_ << ")";
+    }
+    if (p->kind == PatternKind::Range) {
+        out_ << " " << p->int_value;
+        out_ << (p->range_inclusive ? "..=" : "..");
+        out_ << p->int_value_hi;
+    }
     out_ << ")";
 }
 
@@ -561,6 +578,10 @@ void Printer::print_type_param(const TypeParam& tp) {
 void Printer::print_match_arm(const MatchArm& a) {
     out_ << "(arm ";
     print_pattern(a.pattern);
+    if (a.guard) {
+        out_ << " :guard ";
+        print_expr(a.guard);
+    }
     out_ << " ";
     print_expr(a.body);
     out_ << ")";
@@ -593,6 +614,59 @@ void Printer::print_item(const Item& i) {
         }
         out_ << ")";
         return;
+    }
+    if (i.kind == ItemKind::Rewrite) {
+        out_ << " " << intern_.get(i.name);
+        out_ << " :arms (";
+        ++indent_;
+        for (const auto& arm : i.rewrite_arms) {
+            newline();
+            out_ << "(rule ";
+            print_expr(arm.pattern);
+            out_ << " => ";
+            print_expr(arm.replacement);
+            out_ << ")";
+        }
+        --indent_;
+        newline();
+        out_ << "))";
+        return;
+    }
+    if (i.kind == ItemKind::Macro) {
+        out_ << " " << intern_.get(i.name);
+        out_ << " :rules (";
+        ++indent_;
+        for (const auto& arm : i.macro_rules) {
+            newline();
+            out_ << "(rule ";
+            print_expr(arm.pattern);
+            out_ << " => ";
+            print_expr(arm.replacement);
+            out_ << ")";
+        }
+        --indent_;
+        newline();
+        out_ << "))";
+        return;
+    }
+
+    // Print attributes if present.
+    if (!i.attributes.empty()) {
+        out_ << " :attrs (";
+        for (std::size_t k = 0; k < i.attributes.size(); ++k) {
+            if (k > 0) out_ << " ";
+            out_ << "(@" << intern_.get(i.attributes[k].name);
+            if (!i.attributes[k].args.empty()) {
+                out_ << " (";
+                for (std::size_t j = 0; j < i.attributes[k].args.size(); ++j) {
+                    if (j > 0) out_ << " ";
+                    print_expr(i.attributes[k].args[j]);
+                }
+                out_ << ")";
+            }
+            out_ << ")";
+        }
+        out_ << ")";
     }
 
     if (i.name != kInvalidStrId) {
