@@ -34,6 +34,7 @@
 
 #pragma once
 
+#include "ast/nodes.hpp"          // for ast::CallConv
 #include "support/arena.hpp"
 #include "support/intern.hpp"
 #include "support/source.hpp"
@@ -51,6 +52,11 @@ using ValueId = uint32_t;
 using BlockId  = uint32_t;
 using ArenaId  = uint32_t;
 using RegionId = uint32_t;
+
+// Calling convention is shared with the AST: the parser already
+// classifies it, and we just propagate it through to LLVM. Re-using
+// ast::CallConv avoids a redundant enum and a conversion switch.
+using ast::CallConv;
 
 constexpr ValueId kInvalidValue = 0xFFFFFFFFu;
 constexpr BlockId kInvalidBlock = 0xFFFFFFFFu;
@@ -225,6 +231,19 @@ struct Function {
     // Next free ValueId / BlockId for this function.
     ValueId              next_value = 1;  // 0 reserved for "no value"
     BlockId              next_block = 0;
+
+    // Calling convention. Tether functions default to the Tether
+    // convention (which lowers to LLVM's default `ccc` for now);
+    // extern functions carry whatever convention the parser classified
+    // (C, fastcall, stdcall, ...). This is propagated to LLVM's
+    // `define`/`declare`/`call` instructions.
+    CallConv             call_conv = CallConv::Tether;
+
+    // True for `extern fn` declarations — controls name mangling
+    // (externs use the bare symbol name; Tether functions are
+    // `_tether_<name>`) and ensures a `declare` rather than `define`
+    // is emitted.
+    bool                 is_extern = false;
 };
 
 // ---- Module ----
@@ -241,6 +260,12 @@ struct ExternDecl {
     std::vector<TypePtr> param_types;
     TypePtr              return_type = nullptr;
     bool                 is_variadic = false;
+    // Calling convention parsed from `extern "C"` / `extern "fastcall"`
+    // / etc. Defaults to C — that matches the historical behavior of
+    // bare `extern fn foo(...)` before calling conventions were an
+    // explicit feature, and matches the design doc's rule that
+    // `extern "C"` is the universal FFI boundary.
+    CallConv             call_conv = CallConv::C;
 };
 
 struct Module {
@@ -250,6 +275,20 @@ struct Module {
     StrId                   module_name = kInvalidStrId;
     // Arena table: ArenaId -> human-readable name (for diagnostics).
     std::vector<StrId>      arenas;
+
+    // Struct field type table, populated by the builder when it
+    // encounters a `struct` declaration. Used by the LLVM emitter to
+    // emit real `{ i32, double }` layouts instead of the previous
+    // `{ i64, i64 }` widening, which was a v0.2 stub. The key is the
+    // struct's interned name; the value is the ordered list of field
+    // LLVM types. Field names are not stored here — the builder has
+    // its own `struct_defs_` map for name→index resolution.
+    struct StructLayout {
+        StrId                   name;
+        std::vector<TypePtr>    field_types;
+        std::vector<StrId>      field_names;
+    };
+    std::vector<StructLayout> struct_layouts;
 };
 
 // ---- Rendering ----

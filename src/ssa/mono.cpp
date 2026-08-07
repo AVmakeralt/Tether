@@ -222,10 +222,62 @@ StrId Monomorphizer::instantiate(const ast::Item& generic_fn,
     new_fn->name = new_name;
     new_fn->type_params.clear(); // instantiated fn has no type params
 
-    // v0.4: we don't actually substitute types in the body — the SSA
-    // builder will treat all integers as i64 anyway. A proper
-    // implementation would walk the body and replace TypeVar references
-    // with the concrete types.
+    // Build a substitution map: type param name → concrete type.
+    // The AST stores type params by name (StrId), and references to
+    // them in param/return types are ast::TypeKind::Named with
+    // path[0] == the type param's name. We walk the new fn's
+    // signature and replace those references with concrete types.
+    //
+    // v0.9: this replaces the v0.4 stub that relied on the SSA
+    // builder's i64 widening. With real integer widths, the
+    // signature must use the actual instantiated types — otherwise
+    // a `fn id<T>(x: T) -> T` instantiated at i32 would still
+    // declare itself as taking `%struct.T`, which is broken.
+    std::unordered_map<StrId, type::TypePtr> subst;
+    for (size_t i = 0; i < generic_fn.type_params.size() &&
+                        i < type_args.size(); ++i) {
+        subst[generic_fn.type_params[i].name] = type_args[i];
+    }
+
+    // Helper: substitute one AST type. Returns a new (arena-allocated)
+    // ast::Type if a substitution was made; returns the original
+    // pointer if no change was needed.
+    auto subst_type = [&](ast::TypePtr t) -> ast::TypePtr {
+        if (!t) return t;
+        if (t->kind == ast::TypeKind::Named && !t->path.empty()) {
+            auto sit = subst.find(t->path[0]);
+            if (sit != subst.end()) {
+                // Render the concrete type back to a primitive name
+                // and rebuild the AST type. We only handle primitives
+                // here (integers, bool, etc.) since generics over
+                // user-defined types would require more work.
+                std::string name = tc_.render(sit->second);
+                ast::Type nt;
+                nt.kind = ast::TypeKind::Named;
+                nt.range = t->range;
+                nt.path = {intern_.intern(std::string_view(name))};
+                return arena_.construct<ast::Type>(std::move(nt));
+            }
+        }
+        // For composite types (Ref, RawPtr, etc.), recurse into base.
+        // v0.9 keeps this shallow — only the top-level Named type is
+        // substituted. Deeper substitution (e.g. ref T → ref i32) is
+        // left for v1.0.
+        return t;
+    };
+
+    // Substitute param types.
+    auto& params = const_cast<std::vector<ast::Param>&>(new_fn->params);
+    for (auto& p : params) {
+        if (p.type) {
+            p.type = subst_type(p.type);
+        }
+    }
+    // Substitute return type.
+    if (new_fn->return_type) {
+        const_cast<ast::Item*>(new_fn)->return_type =
+            subst_type(new_fn->return_type);
+    }
 
     instantiations_[key] = new_name;
     instantiated_fns_.push_back(new_fn);

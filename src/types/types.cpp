@@ -234,6 +234,29 @@ TypePtr TypeContext::lookup_primitive(std::string_view name) const {
     if (name == "bool") return bool_;
     if (name == "void") return void_;
     if (name == "()" )  return void_;
+    // C ABI aliases. These map to the platform's usual widths
+    // (LP64 on Linux/Mac, LLP64 on Windows). For v0.9 we assume
+    // LP64 — `int` is i32, `long` is i64, `c_char` is i8, etc. A
+    // future version would parameterize these by target platform.
+    // Without these aliases, `extern fn printf(...) -> int` would
+    // resolve `int` to a struct type, which is broken.
+    if (name == "int")      return i32_;
+    if (name == "uint")     return u32_;
+    if (name == "long")     return i64_;
+    if (name == "ulong")    return u64_;
+    if (name == "c_char")   return i8_;
+    if (name == "c_uchar")  return u8_;
+    if (name == "c_schar")  return i8_;
+    if (name == "c_short")  return i16_;
+    if (name == "c_ushort") return u16_;
+    if (name == "c_int")    return i32_;
+    if (name == "c_uint")   return u32_;
+    if (name == "c_long")   return i64_;
+    if (name == "c_ulong")  return u64_;
+    if (name == "c_float")  return f32_;
+    if (name == "c_double") return f64_;
+    if (name == "usize")    return u64_;   // LP64 assumption
+    if (name == "isize")    return i64_;   // LP64 assumption
     return nullptr;
 }
 

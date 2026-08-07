@@ -1,5 +1,16 @@
 # Tether SSA IR and LLVM Lowering — Design and Plan
 
+> **v0.9 (zero-overhead FFI):** the SSA → LLVM lowering no longer
+> widens integers to i64. Function signatures use the declared types
+> (i32 stays i32, i8 stays i8), calling conventions propagate from
+> `extern "C"` / `extern "fastcall"` / etc. to LLVM's `define` /
+> `declare` / `call`, extern functions are referenced by their bare
+> symbol name (no `_tether_` mangling), and call sites look up the
+> callee's signature and emit matching argument types. The result is
+> that a Tether call to `extern fn printf` lowers to a direct
+> `call i32 (i8*, ...) @printf(...)` with no wrapper — exactly the
+> "FFI as a type/ABI lowering system" architecture.
+
 > **Note:** v0.1 does not implement lowering. This document describes
 > the planned design so the AST is shaped to lower into it cleanly.
 
@@ -192,23 +203,97 @@ SSA construction. This keeps rewrite rules scoped to the AST, where
 the programmer can reason about them, and avoids the complexity of
 maintaining a separate graph-rewrite engine.
 
-## What v0.1 has
+## What v0.9 has
 
-The `src/ssa/` directory currently contains:
+The `src/ssa/` directory contains:
 
 - `ssa/node.hpp` — `Opcode`, `Instruction`, `Block`, `Function`,
-  `Module` definitions (scaffolding only).
+  `Module` definitions, including `CallConv` propagation and a
+  `StructLayout` table for real struct field types.
+- `ssa/builder.cpp` — full AST → SSA lowering: basic blocks, phi
+  nodes, mem-token threading, ownership/region/arena tracking,
+  struct/enum construction, monomorphization-aware generics.
+- `ssa/optimizer.cpp` — CSE, DCE, constant folding, SCCP, CFG
+  simplification.
+- `ssa/emit_llvm.cpp` — SSA → LLVM IR text lowering with proper
+  basic blocks, calling conventions, real integer widths, zero-
+  overhead FFI calls, and real struct layouts.
+- `ssa/mono.cpp` — generic monomorphization with type-parameter
+  substitution in signatures.
+- `ssa/partial_eval.cpp` — compile-time function evaluation for
+  `comptime` blocks and constant propagation.
+- `ssa/rewrite.cpp` — AST-level rewrite rules.
+- `ssa/incremental.cpp` — per-function incremental compilation
+  cache (scaffolding).
 
-The SSA construction pass itself is **not** implemented. It will be
-added in a later milestone, once name resolution and type checking
-exist.
+### v0.9 FFI lowering — what "zero-overhead" means here
 
-## What v0.1 deliberately does not have
+A Tether call to an extern function lowers to a direct LLVM `call`
+to the bare C symbol — no wrapper, no trampoline, no conversion.
+Concretely:
+
+```tether
+extern "C" fn printf(fmt: *const u8, ...) -> i32
+
+fn main() -> i32 {
+    printf("hello")
+    return 0
+}
+```
+
+lowers to:
+
+```llvm
+declare i32 @printf(i8*, ...)
+
+define i32 @_tether_main() {
+  %r1 = getelementptr [6 x i8], [6 x i8]* @.str.0, i64 0, i64 0
+  %r2 = call i32 @printf(i8* %r1)
+  %r3 = add i64 0, 0
+  %r4 = trunc i64 %r3 to i32
+  ret i32 %r4
+}
+```
+
+The properties that make this zero-overhead:
+
+1. **Bare symbol name.** The `call` references `@printf`, not
+   `@_tether_printf` and not a generated wrapper. The linker
+   resolves it directly to the C library function.
+2. **Real types.** The `declare` uses `i32` and `i8*`, not the
+   v0.2–v0.8 i64 widening. The call's argument and return types
+   match the declare exactly.
+3. **Calling convention propagated.** `extern "C"` lowers to LLVM's
+   default `ccc` (omitted in text IR); `extern "fastcall"` lowers
+   to `fastcc`; `extern "stdcall"` lowers to `x86_stdcallcc`; etc.
+   The convention appears on both the `declare` and the `call`.
+4. **Variadic handled.** `extern fn printf(fmt: *const u8, ...)`
+   lowers to `declare i32 @printf(i8*, ...)`. Extra call args are
+   passed after the fixed `i8*` parameter, exactly as C expects.
+5. **Implicit casts at the boundary.** A Tether integer literal
+   defaults to `i64`, but if it flows into an `i32` parameter, the
+   emitter inserts a `trunc` at the call site. Same for `sext` /
+   `zext` when widening. The programmer never writes these casts.
+
+The same architecture applies to user-defined Tether functions
+calling each other — they use the `_tether_` mangled name and the
+declared signature, with the same boundary cast logic.
+
+## What v0.9 deliberately does not have
 
 - A tree-walking interpreter. Tether programs are compiled.
 - A direct AST → LLVM lowering. The SSA module is the required
   intermediate stage — without it, the borrow checker has no place
   to enforce ownership.
-- A textual IR printer for the SSA module. Planned, but the module
-  shape is still in flux.
-- An in-tree optimizer. LLVM handles optimization.
+- An in-tree optimizer. LLVM handles optimization. (Tether's own
+  SSA optimizer runs only the passes needed for correctness — CSE,
+  DCE, constant folding — not performance.)
+- A JIT. The pipeline emits `.ll` text, which `clang` or `llc`
+  lowers to machine code. An in-process ORC JIT is a future option.
+- C++ ABI support. `extern "C++"` is parsed but not yet wired to
+  the Itanium or Microsoft C++ ABI — only the calling convention
+  is propagated. C++ name mangling, vtables, and exception
+  unwinding are out of scope for v0.9.
+- Per-target platform parameterization. C ABI aliases like `int`,
+  `c_long`, `usize` are hardcoded to LP64 (Linux/macOS). Windows
+  (LLP64) and 32-bit targets need a target-triple parameter.
