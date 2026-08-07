@@ -119,20 +119,62 @@ fn main() -> i32 {
 Emits:
 
 ```llvm
-define i64 @_tether_add(i64 %arg0, i64 %arg1) {
-entry:
+define i32 @_tether_add(i32 %arg0, i32 %arg1) {
   %r1 = add i64 %arg0, %arg1
-  ret i64 %r1
+  %r2 = trunc i64 %r1 to i32
+  ret i32 %r2
 }
 
-define i64 @_tether_main() {
-entry:
+define i32 @_tether_main() {
   %r1 = add i64 3, 0
   %r2 = add i64 4, 0
-  %r3 = call i64 @_tether_add(i64 %r1, i64 %r2)
-  ret i64 %r3
+  %r3 = trunc i64 %r1 to i32
+  %r4 = trunc i64 %r2 to i32
+  %r5 = call i32 @_tether_add(i32 %r3, i32 %r4)
+  ret i32 %r5
 }
 ```
+
+The signature uses the declared `i32` width (not widened to `i64`),
+and the call matches the signature exactly. The `trunc` instructions
+come from integer literals defaulting to `i64` internally — LLVM's
+optimizer eliminates them in release builds.
+
+### FFI
+
+`extern` functions are referenced by their bare C symbol — no
+`_tether_` mangling, no wrapper. Calling conventions propagate to
+LLVM, and signatures use the declared types (i32 stays i32, not i64).
+
+```tether
+extern "C" fn printf(fmt: *const u8, ...) -> i32
+
+fn main() -> i32 {
+    printf("hello, world\n")
+    return 0
+}
+```
+
+Emits:
+
+```llvm
+declare i32 @printf(i8*, ...)
+
+@.str.0 = private unnamed_addr constant [14 x i8] c"hello, world\0A\00"
+
+define i32 @_tether_main() {
+  %r1 = getelementptr [14 x i8], [14 x i8]* @.str.0, i64 0, i64 0
+  %r2 = call i32 @printf(i8* %r1)
+  %r3 = add i64 0, 0
+  %r4 = trunc i64 %r3 to i32
+  ret i32 %r4
+}
+```
+
+Supported calling conventions: `C` (default), `fastcall`, `stdcall`,
+`vectorcall`, `sysv`, `win64`. C ABI type aliases `int`, `c_int`,
+`c_long`, `usize`, `c_char`, etc. resolve to the appropriate LP64
+widths.
 
 ---
 

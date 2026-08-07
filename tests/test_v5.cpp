@@ -162,7 +162,8 @@ TETHER_TEST(trait_method_resolved) {
         "fn f(p: Point) -> i32 { return p.get_x() }\n");
     // Method should be mangled as Point_get_x.
     TETHER_CHECK(c.llvm_ir.find("@_tether_Point_get_x") != std::string::npos);
-    TETHER_CHECK(c.llvm_ir.find("call i64 @_tether_Point_get_x") != std::string::npos);
+    // v0.9: real return type — call i32, not call i64.
+    TETHER_CHECK(c.llvm_ir.find("call i32 @_tether_Point_get_x") != std::string::npos);
 }
 
 TETHER_TEST(trait_method_with_args) {
@@ -173,8 +174,9 @@ TETHER_TEST(trait_method_with_args) {
         "}\n"
         "fn f(p: Point, q: Point) -> i32 { return p.add(q) }\n");
     TETHER_CHECK(c.llvm_ir.find("@_tether_Point_add") != std::string::npos);
-    // Call should have 2 args (self + other).
-    TETHER_CHECK(c.llvm_ir.find("call i64 @_tether_Point_add(i64") != std::string::npos);
+    // v0.9: real arg types — first arg is %struct.Point, not i64.
+    TETHER_CHECK(c.llvm_ir.find("call i32 @_tether_Point_add(%struct.Point")
+                 != std::string::npos);
 }
 
 // ---- rewrite rules ----
@@ -185,7 +187,8 @@ TETHER_TEST(rewrite_mul_one) {
         "fn f(a: i32) -> i32 { return a * 1 }\n");
     // a * 1 should be rewritten to a — no mul instruction.
     TETHER_CHECK(c.llvm_ir.find("mul") == std::string::npos);
-    TETHER_CHECK(c.llvm_ir.find("ret i64 %arg0") != std::string::npos);
+    // v0.9: real return type — ret i32, not ret i64.
+    TETHER_CHECK(c.llvm_ir.find("ret i32 %arg0") != std::string::npos);
 }
 
 TETHER_TEST(rewrite_mul_zero) {
@@ -213,5 +216,6 @@ TETHER_TEST(rewrite_chained) {
         "}\n"
         "fn f(a: i32) -> i32 { return a * 1 + 0 }\n");
     // Both rewrites should fire: a * 1 + 0 → a + 0 → a.
-    TETHER_CHECK(c.llvm_ir.find("ret i64 %arg0") != std::string::npos);
+    // v0.9: real return type — ret i32, not ret i64.
+    TETHER_CHECK(c.llvm_ir.find("ret i32 %arg0") != std::string::npos);
 }

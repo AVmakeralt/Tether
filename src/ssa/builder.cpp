@@ -27,6 +27,17 @@ Module Builder::lower_module(const ast::Module& m) {
                 def.fields.emplace_back(f.name, resolve_ast_type(f.type));
             }
             struct_defs_[item->name] = std::move(def);
+
+            // Also publish the layout into the SSA module so the
+            // LLVM emitter can produce real `{ i32, double }` struct
+            // types instead of the v0.2 `{ i64, i64 }` widening.
+            Module::StructLayout layout;
+            layout.name = item->name;
+            for (const auto& f : item->fields) {
+                layout.field_types.push_back(resolve_ast_type(f.type));
+                layout.field_names.push_back(f.name);
+            }
+            mod_->struct_layouts.push_back(std::move(layout));
         } else if (item->kind == ItemKind::Enum) {
             EnumDef def;
             def.name = item->name;
@@ -98,6 +109,26 @@ void Builder::lower_item(const ast::Item& item) {
                         impl_type_name = item.impl_type->path[0];
                     }
                     if (impl_type_name != kInvalidStrId) {
+                        // Inject the impl type into any bare `self`
+                        // parameter. The parser leaves `self` (without
+                        // `: Type`) with `p.type == nullptr`; the
+                        // comment in the parser says "type will be
+                        // inferred by name resolution", but the
+                        // resolver doesn't actually do this. We do
+                        // it here, where we know the impl type, by
+                        // constructing a Named AST type pointing at
+                        // the impl type's name. `lower_fn` will then
+                        // resolve it to the proper struct/enum type.
+                        for (auto& p : const_cast<std::vector<ast::Param>&>(
+                                 m->params)) {
+                            if (p.is_self && !p.type) {
+                                ast::Type self_ty;
+                                self_ty.kind = ast::TypeKind::Named;
+                                self_ty.path = {impl_type_name};
+                                p.type = arena_.construct<ast::Type>(
+                                    std::move(self_ty));
+                            }
+                        }
                         // Save and restore the name.
                         StrId orig_name = m->name;
                         const_cast<ast::Item*>(m)->name =
@@ -127,15 +158,43 @@ void Builder::lower_item(const ast::Item& item) {
 
 void Builder::lower_extern(const ast::Item& item) {
     if (!item.extern_decl) return;
-    const ast::Item& fn = *item.extern_decl;
+    const ast::Item* fn = item.extern_decl;
+    // Unwrap nested Extern items. The parser's `ffi "header.h"`
+    // production wraps the following `extern fn ...` in an outer
+    // Extern item (to carry the ffi_header), and parse_extern_decl
+    // itself returns an Extern item wrapping the fn declaration. So
+    // a `ffi "header.h" \n extern fn foo(...)` ends up as
+    // Extern(ffi_header) → Extern() → fn_decl. We follow the chain
+    // until we reach the fn declaration.
+    while (fn && fn->kind == ast::ItemKind::Extern && fn->extern_decl) {
+        fn = fn->extern_decl;
+    }
+    if (!fn) return;
     ExternDecl ext;
-    ext.name = fn.name;
-    for (const auto& p : fn.params) {
+    ext.name = fn->name;
+    for (const auto& p : fn->params) {
+        // Skip the variadic `...` sentinel — it has no type and is
+        // represented by `ext.is_variadic`. The parser adds it to
+        // `fn->params` with `is_variadic=true` and `p.type=nullptr`;
+        // resolving nullptr to a type would yield the `<error>` type
+        // and pollute the declaration.
+        if (p.is_variadic) continue;
         ext.param_types.push_back(resolve_ast_type(p.type));
     }
-    ext.return_type = fn.return_type ? resolve_ast_type(fn.return_type)
+    ext.return_type = fn->return_type ? resolve_ast_type(fn->return_type)
                                      : tc_.void_type();
-    ext.is_variadic = !fn.params.empty() && fn.params.back().is_variadic;
+    ext.is_variadic = !fn->params.empty() && fn->params.back().is_variadic;
+    // Propagate the calling convention parsed by `extern "C"` /
+    // `extern "fastcall"` / etc. The parser stores it on the inner
+    // fn declaration (parse_extern_decl propagates from the outer
+    // extern item to the inner fn). If we see Tether (the default
+    // for non-extern functions), the parser didn't classify a
+    // convention, so fall back to C — that matches the design doc's
+    // rule that extern "C" is the universal FFI boundary.
+    ext.call_conv = fn->call_conv;
+    if (ext.call_conv == CallConv::Tether) {
+        ext.call_conv = CallConv::C;
+    }
     mod_->externs.push_back(std::move(ext));
 }
 
@@ -196,6 +255,10 @@ type::TypePtr Builder::resolve_ast_type(ast::TypePtr t) {
 void Builder::lower_fn(const ast::Item& item) {
     Function fn;
     fn.name = item.name;
+    // Propagate calling convention. Tether-defined fns default to
+    // CallConv::Tether; extern fns (handled by lower_extern, not here)
+    // get their convention from the parser.
+    fn.call_conv = item.call_conv;
     fn_ = &fn;
 
     // Create the entry block.
@@ -340,7 +403,10 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
             inst.block   = current_block_;
             inst.str_data= e.str_value;
             inst.loc     = e.range;
-            return emit(std::move(inst));
+            ValueId result = fresh_value();
+            inst.result  = result;
+            emit(std::move(inst));
+            return result;
         }
         case ExprKind::CharLit: {
             return emit_const_int(e.int_value, tc_.u32());
@@ -613,12 +679,24 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
         }
         case ExprKind::Question:
             return lower_expr(*e.lhs);
-        case ExprKind::Block:
-            lower_block(*e.block);
-            if (e.block && e.block->trailing) {
-                return lower_expr(*e.block->trailing);
+        case ExprKind::Block: {
+            // lower_block already lowers both the statements and the
+            // trailing expression (if any). We must NOT call
+            // lower_expr on the trailing again — that would emit its
+            // side effects twice (e.g. calling malloc twice for
+            // `let buf = { malloc(1024) }`). To get the trailing's
+            // ValueId without re-lowering, we lower the stmts
+            // manually and then lower the trailing exactly once.
+            if (e.block) {
+                for (StmtPtr s : e.block->stmts) {
+                    if (s) lower_stmt(*s);
+                }
+                if (e.block->trailing) {
+                    return lower_expr(*e.block->trailing);
+                }
             }
             return kInvalidValue;
+        }
         case ExprKind::If: {
             ValueId cond = lower_expr(*e.cond);
             BlockId cond_block = current_block_;
@@ -1011,9 +1089,19 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
             return emit(std::move(borrow));
         }
         case ExprKind::Unsafe: {
+            // Same double-evaluation fix as ExprKind::Block: lower
+            // stmts once, then lower the trailing exactly once.
+            // (lower_block would lower the trailing too, and then
+            // the explicit lower_expr below would lower it a second
+            // time — emitting malloc(1024) twice for `let buf =
+            // unsafe { malloc(1024) }`.)
             bool saved = in_unsafe_;
             in_unsafe_ = true;
-            lower_block(*e.block);
+            if (e.block) {
+                for (StmtPtr s : e.block->stmts) {
+                    if (s) lower_stmt(*s);
+                }
+            }
             in_unsafe_ = saved;
             if (e.block && e.block->trailing) {
                 return lower_expr(*e.block->trailing);
@@ -1024,9 +1112,14 @@ ValueId Builder::lower_expr(const ast::Expr& e) {
         case ExprKind::Comptime: {
             // Lower the block. The partial evaluator will run on the
             // resulting SSA and fold any constant expressions.
-            lower_block(*e.block);
-            if (e.block && e.block->trailing) {
-                return lower_expr(*e.block->trailing);
+            // (Same double-evaluation fix as Block/Unsafe.)
+            if (e.block) {
+                for (StmtPtr s : e.block->stmts) {
+                    if (s) lower_stmt(*s);
+                }
+                if (e.block->trailing) {
+                    return lower_expr(*e.block->trailing);
+                }
             }
             return kInvalidValue;
         }

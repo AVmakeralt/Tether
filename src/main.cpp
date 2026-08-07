@@ -74,7 +74,7 @@ struct Options {
 
 void print_help() {
     std::cout <<
-        "tetherc — Tether compiler (v0.3: full SSA pipeline)\n"
+        "tetherc — Tether compiler (v0.9: zero-overhead FFI)\n"
         "\n"
         "Usage:\n"
         "  tetherc <file.tether>                Full pipeline → LLVM IR.\n"
@@ -102,7 +102,7 @@ void print_help() {
 }
 
 void print_version() {
-    std::cout << "tetherc 0.3.0\n";
+    std::cout << "tetherc 0.9.0\n";
 }
 
 bool parse_args(int argc, char** argv, Options& opts) {

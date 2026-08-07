@@ -61,9 +61,14 @@ TETHER_TEST(struct_construction) {
     auto c = compile(
         "struct Point { x: i32, y: i32 }\n"
         "fn make(a: i32, b: i32) -> Point { return Point(a, b) }\n");
-    TETHER_CHECK(c.llvm_ir.find("alloca { i64, i64 }") != std::string::npos);
+    // v0.9: structs use their real layout, not the v0.4 { i64, i64 }
+    // widening. Point is { i32, i32 } and the constructor emits a
+    // typed alloca + GEP + store for each field.
+    TETHER_CHECK(c.llvm_ir.find("%struct.Point = type { i32, i32 }")
+                 != std::string::npos);
+    TETHER_CHECK(c.llvm_ir.find("alloca %struct.Point") != std::string::npos);
     TETHER_CHECK(c.llvm_ir.find("getelementptr") != std::string::npos);
-    TETHER_CHECK(c.llvm_ir.find("store i64") != std::string::npos);
+    TETHER_CHECK(c.llvm_ir.find("store i32") != std::string::npos);
 }
 
 TETHER_TEST(struct_field_access) {
@@ -71,7 +76,8 @@ TETHER_TEST(struct_field_access) {
         "struct Point { x: i32, y: i32 }\n"
         "fn get_x(p: Point) -> i32 { return p.x }\n");
     TETHER_CHECK(c.llvm_ir.find("getelementptr") != std::string::npos);
-    TETHER_CHECK(c.llvm_ir.find("load i64") != std::string::npos);
+    // v0.9: real field type (i32) instead of widened i64.
+    TETHER_CHECK(c.llvm_ir.find("load i32") != std::string::npos);
 }
 
 TETHER_TEST(enum_construction) {
@@ -126,7 +132,10 @@ TETHER_TEST(generic_fn_monomorphized) {
         "fn f() -> i32 { return max(3, 7) }\n");
     // The generic fn should be present (mangled or not).
     TETHER_CHECK(c.llvm_ir.find("@_tether_max") != std::string::npos);
-    // The call should reference the instantiated name.
+    // IntLit defaults to i64, so the instantiation is max_i64 and
+    // the call returns i64. This was already correct in v0.8 — the
+    // i64 here is from type inference, not from the v0.2–v0.8
+    // widening stub.
     TETHER_CHECK(c.llvm_ir.find("call i64 @_tether_max") != std::string::npos);
 }
 
@@ -135,6 +144,7 @@ TETHER_TEST(generic_fn_two_call_sites) {
         "fn id<T>(x: T) -> T { return x }\n"
         "fn f() -> i32 { return id(1) + id(2) }\n");
     // Both calls should go to the same instantiated function.
+    // IntLit → i64, so the instantiation is id_i64.
     size_t call_count = 0;
     size_t pos = 0;
     while ((pos = c.llvm_ir.find("call i64 @_tether_id", pos)) != std::string::npos) {
